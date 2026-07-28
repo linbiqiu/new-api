@@ -94,6 +94,7 @@ const (
 	MsgUserNoPermissionSameLevel     = "user.no_permission_same_level"
 	MsgUserNoPermissionHigherLevel   = "user.no_permission_higher_level"
 	MsgUserCannotCreateHigherLevel   = "user.cannot_create_higher_level"
+	MsgUserDeletionDisabled          = "user.deletion_disabled"
 	MsgUserCannotDeleteRootUser      = "user.cannot_delete_root_user"
 	MsgUserCannotDisableRootUser     = "user.cannot_disable_root_user"
 	MsgUserCannotDemoteRootUser      = "user.cannot_demote_root_user"

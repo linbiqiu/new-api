@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import type { Row } from '@tanstack/react-table'
 import {
   Pencil,
-  Trash2,
   Power,
   PowerOff,
   ArrowUp,
@@ -49,7 +48,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { UserModelQuotaDialog } from '@/features/model-quota/user-model-quota-dialog'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
+
 import {
   convertToOrganization,
   manageUser,
@@ -64,10 +65,9 @@ import {
 } from '../constants'
 import { getUserActionMessage } from '../lib'
 import type { User, ManageUserAction } from '../types'
+import { AgentOwnerDialog } from './agent-owner-dialog'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
 import { FeishuTokenManagerDialog } from './feishu-token-manager-dialog'
-import { AgentOwnerDialog } from './agent-owner-dialog'
-import { UserModelQuotaDialog } from '@/features/model-quota/user-model-quota-dialog'
 import { useUsers } from './users-provider'
 
 interface DataTableRowActionsProps {
@@ -96,12 +96,7 @@ export function DataTableRowActions({
     setOpen('update')
   }
 
-  const handleDelete = () => {
-    setCurrentRow(user)
-    setOpen('delete')
-  }
-
-  const handleManage = async (action: Exclude<ManageUserAction, 'delete'>) => {
+  const handleManage = async (action: ManageUserAction) => {
     try {
       const result = await manageUser(user.id, action)
       if (result.success) {
@@ -298,31 +293,31 @@ export function DataTableRowActions({
           </DropdownMenuShortcut>
         </DropdownMenuItem>
 
-          {accountType === 1 && (
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault()
-                setAgentOwnerOpen(true)
-              }}
-            >
-              {t('管理负责人')}
-              <DropdownMenuShortcut>
-                <UserCog size={16} />
-              </DropdownMenuShortcut>
-            </DropdownMenuItem>
-          )}
-
+        {accountType === 1 && (
           <DropdownMenuItem
             onSelect={(event) => {
               event.preventDefault()
-              setModelQuotaOpen(true)
+              setAgentOwnerOpen(true)
             }}
           >
-            {t('模型额度详情')}
+            {t('管理负责人')}
             <DropdownMenuShortcut>
-              <Gauge size={16} />
+              <UserCog size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
+        )}
+
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
+            setModelQuotaOpen(true)
+          }}
+        >
+          {t('模型额度详情')}
+          <DropdownMenuShortcut>
+            <Gauge size={16} />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
 
         <DropdownMenuSeparator />
 
@@ -349,19 +344,6 @@ export function DataTableRowActions({
           {t('Reset 2FA')}
           <DropdownMenuShortcut>
             <ShieldAlert size={16} />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
-
-        <DropdownMenuSeparator />
-
-        <DropdownMenuItem
-          onClick={handleDelete}
-          className='text-destructive focus:text-destructive'
-          disabled={isRoot}
-        >
-          {t('Delete')}
-          <DropdownMenuShortcut>
-            <Trash2 size={16} />
           </DropdownMenuShortcut>
         </DropdownMenuItem>
       </DataTableRowActionMenu>

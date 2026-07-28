@@ -152,13 +152,6 @@ export interface UpdateUserSettingsRequest {
 }
 
 /**
- * Account deletion request
- */
-export interface DeleteAccountRequest {
-  password?: string
-}
-
-/**
  * Account binding item
  */
 export interface BindingItem {

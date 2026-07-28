@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
 
@@ -21,6 +22,7 @@ import (
 
 func setupManageUserTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	require.NoError(t, i18n.Init())
 	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedisEnabled := common.RedisEnabled
 	previousMainDatabaseType, previousLogDatabaseType := common.MainDatabaseType(), common.LogDatabaseType()
@@ -134,26 +136,51 @@ func TestManageUserDemoteAdvancesAuthVersionAndRevokesSessionsOnce(t *testing.T)
 	assert.Equal(t, 1, sessionUpdateCount)
 }
 
-func TestManageUserDeleteReturnsImmediatelyAndUnknownActionFails(t *testing.T) {
+func TestUserDeletionEndpointsAreDisabled(t *testing.T) {
 	db := setupManageUserTestDB(t)
-	deleted := model.User{
+	user := model.User{
 		Username: "managed-delete-user", Password: "password", Role: common.RoleCommonUser,
 		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, AffCode: "delete-aff",
 	}
-	require.NoError(t, db.Create(&deleted).Error)
+	require.NoError(t, db.Create(&user).Error)
 
-	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"delete"}`, deleted.Id))
-	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	var deletedCount int64
-	require.NoError(t, db.Unscoped().Model(&model.User{}).Where("id = ? AND deleted_at IS NOT NULL", deleted.Id).Count(&deletedCount).Error)
-	assert.EqualValues(t, 1, deletedCount)
+	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"delete"}`, user.Id))
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":false`)
+
+	gin.SetMode(gin.TestMode)
+	recorder = httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/user/%d", user.Id), nil)
+	c.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", user.Id)}}
+	c.Set("id", 9999)
+	c.Set("role", common.RoleRootUser)
+	DeleteUser(c)
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":false`)
+
+	recorder = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/user/self", nil)
+	c.Set("id", user.Id)
+	DeleteSelf(c)
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":false`)
+
+	var activeCount int64
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.Id).Count(&activeCount).Error)
+	assert.EqualValues(t, 1, activeCount)
+}
+
+func TestManageUserUnknownActionFails(t *testing.T) {
+	db := setupManageUserTestDB(t)
 
 	unchanged := model.User{
 		Username: "managed-unknown-user", Password: "password", Role: common.RoleCommonUser,
 		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, AffCode: "unknown-aff",
 	}
 	require.NoError(t, db.Create(&unchanged).Error)
-	recorder = performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"unknown"}`, unchanged.Id))
+	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"unknown"}`, unchanged.Id))
 	assert.Contains(t, recorder.Body.String(), `"success":false`)
 	require.NoError(t, db.First(&unchanged, unchanged.Id).Error)
 	assert.EqualValues(t, 1, unchanged.AuthVersion)

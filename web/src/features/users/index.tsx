@@ -20,7 +20,6 @@ import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 
-import { UsersDeleteDialog } from './components/users-delete-dialog'
 import { FeishuBatchInitDialog } from './components/feishu-batch-init-dialog'
 import { UsersMutateDrawer } from './components/users-mutate-drawer'
 import { UsersPrimaryButtons } from './components/users-primary-buttons'
@@ -52,7 +51,6 @@ function UsersContent({ accountType = 0 }: { accountType?: number }) {
         onOpenChange={(isOpen) => !isOpen && setOpen(null)}
         currentRow={open === 'update' ? currentRow || undefined : undefined}
       />
-      <UsersDeleteDialog />
       {!isOrganization && (
         <FeishuBatchInitDialog
           open={open === 'feishu_batch_init'}
