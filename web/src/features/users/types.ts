@@ -172,6 +172,7 @@ export type ManageUserAction =
   | 'demote'
   | 'enable'
   | 'disable'
+  | 'delete'
   | 'add_quota'
 
 export type QuotaAdjustMode = 'add' | 'subtract' | 'override'
@@ -190,6 +191,7 @@ export interface ManageUserQuotaPayload {
 export type UsersDialogType =
   | 'create'
   | 'update'
+  | 'delete'
   | 'feishu_batch_init'
   | 'feishu_token_manager'
   | 'agent_owner'

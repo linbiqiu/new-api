@@ -116,7 +116,15 @@ export async function updateUser(
 }
 
 /**
- * Manage user (promote, demote, enable, disable)
+ * Delete a single user (hard delete)
+ */
+export async function deleteUser(id: number): Promise<ApiResponse> {
+  const res = await api.delete(`/api/user/${id}/`)
+  return res.data
+}
+
+/**
+ * Manage user (promote, demote, enable, disable, delete)
  */
 export async function manageUser(
   id: number,
@@ -183,7 +191,9 @@ export async function bindAgentOwner(
 /**
  * Unbind agent owner for organization/agent accounts
  */
-export async function unbindAgentOwner(id: number): Promise<ApiResponse<null>> {
+export async function unbindAgentOwner(
+  id: number
+): Promise<ApiResponse<null>> {
   const res = await api.delete(`/api/user/${id}/agent-owner`)
   return res.data
 }

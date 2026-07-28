@@ -136,53 +136,41 @@ func TestManageUserDemoteAdvancesAuthVersionAndRevokesSessionsOnce(t *testing.T)
 	assert.Equal(t, 1, sessionUpdateCount)
 }
 
-func TestUserDeletionEndpointsAreDisabled(t *testing.T) {
+func TestManageUserDeleteIsDisabledAndUnknownActionFails(t *testing.T) {
 	db := setupManageUserTestDB(t)
-	user := model.User{
+	deleted := model.User{
 		Username: "managed-delete-user", Password: "password", Role: common.RoleCommonUser,
 		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, AffCode: "delete-aff",
 	}
-	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&deleted).Error)
 
-	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"delete"}`, user.Id))
+	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"delete"}`, deleted.Id))
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"success":false`)
-
-	gin.SetMode(gin.TestMode)
-	recorder = httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/user/%d", user.Id), nil)
-	c.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", user.Id)}}
-	c.Set("id", 9999)
-	c.Set("role", common.RoleRootUser)
-	DeleteUser(c)
-	assert.Equal(t, http.StatusForbidden, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), `"success":false`)
-
-	recorder = httptest.NewRecorder()
-	c, _ = gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodDelete, "/api/user/self", nil)
-	c.Set("id", user.Id)
-	DeleteSelf(c)
-	assert.Equal(t, http.StatusForbidden, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), `"success":false`)
-
 	var activeCount int64
-	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.Id).Count(&activeCount).Error)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", deleted.Id).Count(&activeCount).Error)
 	assert.EqualValues(t, 1, activeCount)
-}
-
-func TestManageUserUnknownActionFails(t *testing.T) {
-	db := setupManageUserTestDB(t)
 
 	unchanged := model.User{
 		Username: "managed-unknown-user", Password: "password", Role: common.RoleCommonUser,
 		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, AffCode: "unknown-aff",
 	}
 	require.NoError(t, db.Create(&unchanged).Error)
-	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"unknown"}`, unchanged.Id))
+	recorder = performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"unknown"}`, unchanged.Id))
 	assert.Contains(t, recorder.Body.String(), `"success":false`)
 	require.NoError(t, db.First(&unchanged, unchanged.Id).Error)
 	assert.EqualValues(t, 1, unchanged.AuthVersion)
 	assert.Equal(t, common.UserStatusEnabled, unchanged.Status)
+}
+
+func TestDeleteUserAndSelfAreDisabled(t *testing.T) {
+	setupManageUserTestDB(t)
+	for _, handler := range []gin.HandlerFunc{DeleteUser, DeleteSelf} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/api/user/1", nil)
+		handler(c)
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), `"success":false`)
+	}
 }

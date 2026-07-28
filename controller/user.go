@@ -992,19 +992,77 @@ func checkUpdatePassword(originalPassword string, newPassword string, userId int
 	return
 }
 
-func DeleteUser(c *gin.Context) {
-	rejectUserDeletion(c)
-}
+const userDeletionEnabled = false
 
-func DeleteSelf(c *gin.Context) {
-	rejectUserDeletion(c)
-}
-
-func rejectUserDeletion(c *gin.Context) {
+func rejectUserDeletion(c *gin.Context) bool {
+	if userDeletionEnabled {
+		return false
+	}
 	c.JSON(http.StatusForbidden, gin.H{
 		"success": false,
 		"message": i18n.T(c, i18n.MsgUserDeletionDisabled),
 	})
+	return true
+}
+
+func DeleteUser(c *gin.Context) {
+	if rejectUserDeletion(c) {
+		return
+	}
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	originUser, err := model.GetUserById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	myRole := c.GetInt("role")
+	if myRole <= originUser.Role {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+		return
+	}
+	err = model.HardDeleteUserById(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, originUser.Id, "user.delete", map[string]interface{}{
+		"username": originUser.Username,
+		"id":       originUser.Id,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+	return
+}
+
+func DeleteSelf(c *gin.Context) {
+	if rejectUserDeletion(c) {
+		return
+	}
+	id := c.GetInt("id")
+	user, _ := model.GetUserById(id, false)
+
+	if user.Role == common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
+		return
+	}
+
+	err := model.DeleteUserById(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+	return
 }
 
 // ConvertToOrganization 将个人用户转换为组织账号（单向不可逆）
@@ -1176,10 +1234,6 @@ func ManageUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	if req.Action == "delete" {
-		rejectUserDeletion(c)
-		return
-	}
 	user := model.User{
 		Id: req.Id,
 	}
@@ -1203,6 +1257,36 @@ func ManageUser(c *gin.Context) {
 		}
 	case "enable":
 		user.Status = common.UserStatusEnabled
+	case "delete":
+		if rejectUserDeletion(c) {
+			return
+		}
+		if user.Role == common.RoleRootUser {
+			common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
+			return
+		}
+		if err := user.Delete(); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		// 删除用户后，强制清理 Redis 中所有该用户令牌的缓存，
+		// 避免已缓存的令牌在 TTL 过期前仍能通过 TokenAuth 校验。
+		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
+			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
+		}
+		recordManageAuditFor(c, user.Id, "user.manage", map[string]interface{}{
+			"action":   req.Action,
+			"username": user.Username,
+			"id":       user.Id,
+		})
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+		})
+		return
 	case "promote":
 		if myRole != common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserAdminCannotPromote)
