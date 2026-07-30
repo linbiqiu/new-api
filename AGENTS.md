@@ -35,10 +35,8 @@ types/         — Type definitions (relay formats, file sources, errors)
 i18n/          — Backend internationalization (go-i18n, en/zh)
 oauth/         — OAuth provider implementations
 pkg/           — Internal packages (cachex, ionet)
-web/             — Frontend themes container
- web/default/   — Default frontend (React 19, Rsbuild, Base UI, Tailwind)
-  web/classic/   — Classic frontend (React 18, Vite, Semi Design)
-  web/default/src/i18n/ — Frontend internationalization (i18next, zh/en/fr/ru/ja/vi)
+web/             — Default frontend (React 19, Rsbuild, Base UI, Tailwind)
+ web/src/i18n/   — Frontend internationalization (i18next, zh/en/fr/ru/ja/vi)
 ```
 
 ## Internationalization (i18n)
@@ -47,12 +45,12 @@ web/             — Frontend themes container
 - Library: `nicksnyder/go-i18n/v2`
 - Languages: en, zh
 
-### Frontend (`web/default/src/i18n/`)
+### Frontend (`web/src/i18n/`)
 - Library: `i18next` + `react-i18next` + `i18next-browser-languagedetector`
 - Languages: en (base), zh (fallback), fr, ru, ja, vi
-- Translation files: `web/default/src/i18n/locales/{lang}.json` — flat JSON, keys are English source strings
+- Translation files: `web/src/i18n/locales/{lang}.json` — flat JSON, keys are English source strings
 - Usage: `useTranslation()` hook, call `t('English key')` in components
-- CLI tools: `bun run i18n:sync` (from `web/default/`)
+- CLI tools: `bun run i18n:sync` (from `web/`)
 
 ## Rules
 
@@ -112,7 +110,7 @@ All database code MUST be fully compatible with all three databases simultaneous
 
 ### Rule 3: Frontend — Prefer Bun
 
-Use `bun` as the preferred package manager and script runner for the frontend (`web/default/` directory):
+Use `bun` as the preferred package manager and script runner for the frontend (`web/` directory):
 - `bun install` for dependency installation
 - `bun run dev` for development server
 - `bun run build` for production build
@@ -170,16 +168,24 @@ When working on tiered/dynamic billing (expression-based pricing), you MUST read
 
 ### Rule 8: Frontend Theme — Default Theme Is `default`
 
-Production and test environments should use the `default` frontend theme by default. The legacy `classic` theme remains in the repository for comparison and fallback only; do not implement new admin/dashboard features in `web/classic/` unless explicitly requested.
+Production and test environments should use the `default` frontend theme. The tracked production frontend is `web/`; local untracked frontend directories are not release inputs.
 
 Operational requirements:
-- Build and release the `web/default/` frontend for production changes.
+- Build and release the tracked `web/` frontend for production changes.
 - Ensure the system option `theme.frontend` is set to `default` before production rollout.
 - Keep OAuth callback domains/ports consistent with the deployed backend origin; for local Feishu OAuth testing, use the same single backend origin that is configured in the Feishu app.
 
 Test deployment workflow:
-1. Build the default frontend from `web/default/` with `bun run build`.
+1. Build the default frontend from `web/` with `bun run build:check`.
 2. Build the Go binary so the embedded frontend assets are included.
 3. Run the backend on port `3000` for local single-origin testing.
 4. Set `theme.frontend=default` in the test database/system options.
 5. Verify `/sign-in`, `/users`, `/subscriptions`, and `/user-model-stats` on `http://localhost:3000/`.
+
+### Rule 9: Production Release Discipline
+
+- Root `VERSION` is the single source of truth for the application and image version. Increment it, commit it, and push the release commit before every build. Never reuse the version already recorded in `VERSION` for a new release.
+- Never overwrite an existing ACR tag. A tag identifies one immutable release and must remain usable for rollback.
+- Production images must be built by `production-deploy/build.sh` from a clean Git worktree whose commit is already present on `origin`. Never package uncommitted or untracked work, including local IDone/Feishu work.
+- Upstream synchronization releases contain only upstream changes unless the user explicitly approves additional local fixes. Keep local feature work on its local branch/worktree and out of release commits and images.
+- Building and pushing an image does not deploy it. Production restart is a separate operation requiring backup, current-image capture, `docker compose pull`, a `--no-deps` restart, health/log verification, and a known rollback tag.

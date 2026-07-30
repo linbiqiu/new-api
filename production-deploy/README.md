@@ -82,27 +82,40 @@ production-deploy/
 
 ## 部署流程
 
+### 发布硬性规则
+
+- 仓库根目录 `VERSION` 是应用版本和镜像 tag 的唯一来源。每次发布必须先递增 `VERSION`，单独提交并推送；不要在文档或聊天记录中维护另一个“当前版本”。
+- ACR tag 是不可变发布标识。已有 tag 禁止覆盖，回退必须依赖原 tag 仍指向原镜像。
+- 只允许从已提交、已推送且工作树干净的源码构建生产镜像。未提交或未跟踪的 IDone/Feishu 等本地内容不得进入发布提交或镜像。
+- 当前受 Git 跟踪的生产前端位于 `web/`，生产主题为 `default`；不要把本地未跟踪目录当作生产前端。
+- “构建并推送镜像”与“部署生产”是两个独立动作。推送成功不会自动重启生产服务。
+
 ### 方式一：本地构建 + ACR 推送 + 生产拉取（推荐）
 
 详见 [LOCAL-BUILD-ACR-PROD-DEPLOY.md](./LOCAL-BUILD-ACR-PROD-DEPLOY.md)
 
 ```bash
-# 本地一键构建并推送（Mac 执行）
-cd production-deploy
-./build.sh 1.1.0
+# 本地：先更新并提交版本（示例版本必须替换为一个未使用的新版本）
+printf '%s\n' '<新版本号>' > VERSION
+git add VERSION
+git commit -m "chore: bump version to <新版本号>"
+git push origin HEAD
 
-# 生产服务器拉取并重启（仅升级 new-api，需要 sudo）
+# 从干净的已推送工作树构建并推送
+./production-deploy/build.sh
+
+# 生产：完成备份并修改 .env 中 NEW_API_IMAGE 后，仅升级 new-api
 sudo docker compose pull new-api
 sudo docker compose up -d new-api --no-deps
 ```
 
-### 方式二：本地打包 + SCP 上传（旧方式）
+### 方式二：仅在本地构建和验证
 
 ```bash
-cd production-deploy
-./build.sh 1.1.0 --skip-push
-# 输出目录：production-deploy/output/
+./production-deploy/build.sh --skip-push
 ```
+
+该命令只生成并验证本地镜像，不推送，也不能用于生产部署。
 
 ### 首次服务器初始化
 

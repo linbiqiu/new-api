@@ -4,7 +4,7 @@
 
 本文档用于规范以下完整流程：
 
-1. 在本地 Mac 编译前端 + Go 二进制
+1. 在本地 Mac 从干净、已推送的提交编译 `web/` 前端和 Go 二进制
 2. 用编译好的二进制构建 Docker 镜像
 3. 推送到阿里云私有镜像仓库（ACR）
 4. 在生产服务器（CentOS）无损发布
@@ -32,9 +32,11 @@
 crpi-bij57v7e3thiuuod.cn-shenzhen.personal.cr.aliyuncs.com/ccpg_einwin/new-api:<版本号>
 ```
 
-### 2.2 本地代码路径
+### 2.2 版本和源码
 
-- new-api fork：`/Users/linbiqiu/new-api-test/new-api-fork`
+- 仓库根目录 `VERSION` 是应用版本和镜像 tag 的唯一来源。
+- `build.sh` 会根据自身位置定位仓库，不依赖某台机器的绝对路径。
+- 生产构建只接受工作树干净、且提交已存在于 `origin` 分支的源码。
 
 ---
 
@@ -56,7 +58,11 @@ docker buildx inspect --bootstrap
 ### 3.3 关键原则
 
 - 本地构建必须指定：`--platform linux/amd64`
-- 生产发布必须使用固定 tag（例如 `1.1.0`），不要用 `latest`
+- 生产发布必须使用 `VERSION` 对应的固定 tag，不要用 `latest`
+- 每次发布先递增、提交并推送 `VERSION`；不要在文档中硬编码“当前最新版本”
+- 已存在的 ACR tag 禁止覆盖；一个 tag 永远只对应一个源码版本和镜像 digest
+- 当前生产前端是受 Git 跟踪的 `web/`，生产主题是 `default`
+- 未提交或未跟踪的 IDone/Feishu 等本地工作不得进入发布提交或镜像
 - 发版只改应用镜像，不动数据库和 Redis
 - **生产服务器所有 docker 命令需要 `sudo`**
 
@@ -64,59 +70,68 @@ docker buildx inspect --bootstrap
 
 ## 4. 一键构建并推送（推荐，本地 Mac 执行）
 
-使用 `build.sh` 脚本一键完成前端构建 → Go编译 → 镜像打包 → ACR推送：
+先更新版本并推送提交。`<新版本号>` 必须是 ACR 中从未使用的版本：
 
 ```bash
-cd /Users/linbiqiu/new-api-test/new-api-fork/production-deploy
-chmod +x build.sh
+cd <仓库根目录>
+printf '%s\n' '<新版本号>' > VERSION
+git add VERSION
+git commit -m "chore: bump version to <新版本号>"
+git push origin HEAD
+```
 
-./build.sh 1.1.0
+确认工作树完全干净后，一键完成前端检查与构建、Go 编译、镜像构建、`/api/status` 冒烟测试和 ACR 推送：
+
+```bash
+git status --short
+./production-deploy/build.sh
 ```
 
 脚本参数：
 
 | 参数 | 说明 |
 |------|------|
-| `--skip-build` | 跳过本地编译（使用已有的二进制文件） |
 | `--skip-push` | 跳过 ACR 推送（只构建镜像不推送） |
-| `--skip-classic` | 跳过 classic 前端构建 |
-| `--skip-default` | 跳过 default 前端构建 |
+| `-h`, `--help` | 显示帮助，不执行构建或推送 |
 
 示例：
 
 ```bash
-./build.sh 1.1.0                    # 完整构建 + 推送
-./build.sh 1.1.0 --skip-default     # 跳过 default 前端（生产用 classic）
-./build.sh 1.1.0 --skip-push        # 只构建不推送
+./production-deploy/build.sh              # 完整构建、验证并推送
+./production-deploy/build.sh --skip-push  # 完整构建和验证，但不推送
 ```
 
 ### 常用场景速查
 
 | 场景 | 命令 | 耗时 |
 |------|------|------|
-| 全量构建（前后端都改了） | `./build.sh <版本>` | 慢（~5-10min） |
-| **仅改了后端 Go 代码** | `./build.sh <版本> --skip-classic --skip-default` | 快（~2-3min） |
-| 仅改了 classic 前端 | `./build.sh <版本> --skip-default --skip-build` → 手动先 build classic | 中等 |
-| 改了 docker 配置 | `./build.sh <版本> --skip-classic --skip-default --skip-build` | 最快 |
+| 正式发布 | `./production-deploy/build.sh` | 构建、验证、检查 tag 并推送 |
+| 本地发布演练 | `./production-deploy/build.sh --skip-push` | 构建并验证，不访问生产部署 |
+
+脚本不提供跳过前端或复用旧二进制的选项，因为这两种方式可能让镜像内容与 `VERSION`、源码提交不一致。
 
 ---
 
 ## 5. 手动构建（分步操作，本地 Mac 执行）
 
-### 5.1 构建 classic 前端
+### 5.1 读取版本并构建 default 前端
 
 ```bash
-cd /Users/linbiqiu/new-api-test/new-api-fork/web/classic
-bun install && bun run build
+cd <仓库根目录>
+VERSION=$(tr -d '[:space:]' < VERSION)
+cd web
+bun install --frozen-lockfile
+bun run build:check
 ```
 
 ### 5.2 编译 Go 二进制（linux/amd64）
 
 ```bash
-cd /Users/linbiqiu/new-api-test/new-api-fork
+cd <仓库根目录>
+VERSION=$(tr -d '[:space:]' < VERSION)
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOEXPERIMENT=greenteagc \
-  go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=1.1.0'" \
+  go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=${VERSION}'" \
   -o new-api .
 ```
 
@@ -130,11 +145,12 @@ file new-api
 ### 5.3 构建 Docker 镜像
 
 ```bash
-cd /Users/linbiqiu/new-api-test/new-api-fork
+cd <仓库根目录>
+VERSION=$(tr -d '[:space:]' < VERSION)
 
 docker buildx build \
   --platform linux/amd64 \
-  -t crpi-bij57v7e3thiuuod.cn-shenzhen.personal.cr.aliyuncs.com/ccpg_einwin/new-api:1.1.0 \
+  -t crpi-bij57v7e3thiuuod.cn-shenzhen.personal.cr.aliyuncs.com/ccpg_einwin/new-api:${VERSION} \
   -f deploy/Dockerfile.local \
   --load \
   .
@@ -143,8 +159,13 @@ docker buildx build \
 ### 5.4 推送到 ACR
 
 ```bash
-docker push crpi-bij57v7e3thiuuod.cn-shenzhen.personal.cr.aliyuncs.com/ccpg_einwin/new-api:1.1.0
+VERSION=$(tr -d '[:space:]' < VERSION)
+docker manifest inspect crpi-bij57v7e3thiuuod.cn-shenzhen.personal.cr.aliyuncs.com/ccpg_einwin/new-api:${VERSION}
+# 只有上一步明确返回 no such manifest 时才允许首次推送
+docker push crpi-bij57v7e3thiuuod.cn-shenzhen.personal.cr.aliyuncs.com/ccpg_einwin/new-api:${VERSION}
 ```
+
+推荐始终使用 `build.sh`。手动流程也必须遵守干净提交、已推送提交、tag 不存在和冒烟测试要求。
 
 ---
 
@@ -180,7 +201,7 @@ sudo nano /opt/production-deploy/.env
 修改这一行：
 
 ```env
-NEW_API_IMAGE=crpi-bij57v7e3thiuuod.cn-shenzhen.personal.cr.aliyuncs.com/ccpg_einwin/new-api:1.1.0
+NEW_API_IMAGE=crpi-bij57v7e3thiuuod.cn-shenzhen.personal.cr.aliyuncs.com/ccpg_einwin/new-api:<本次VERSION>
 ```
 
 > CLIPROXY_API_IMAGE 保持不变，这次只升级 new-api。
@@ -369,7 +390,10 @@ sudo docker compose version
 
 ## 10. 版本管理
 
-- 使用语义化版本：`1.0.0` → `1.1.0`（功能版本） → `1.1.1`（修复版本）
+- `VERSION` 是唯一版本记录；不得从聊天记录、旧文档示例或本地镜像猜测版本号
+- 每次发布必须使用新版本号，提交并推送 `VERSION` 后才能构建
+- ACR tag 不可变，禁止重新构建并覆盖同名 tag
+- 使用语义化版本：功能版本递增 minor，修复版本递增 patch
 - 每次发版前做 `.env` 备份和数据库备份
 - 保留至少最近 2~3 个稳定 tag 便于回退
-- 当前最新版本：`1.1.0`（飞书 OAuth + 订阅系统）
+- 文档不记录“当前最新版本”的静态副本；始终执行 `cat VERSION` 获取仓库记录
