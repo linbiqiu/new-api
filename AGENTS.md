@@ -56,9 +56,22 @@ web/             — Frontend themes container
 
 ## Rules
 
-### Rule 1: JSON Package — Use `common/json.go`
+### Common Code Quality
 
-All JSON marshal/unmarshal operations MUST use the wrapper functions in `common/json.go`:
+- New code should stay direct and readable. Prefer early returns, clear branches, and well-named local variables to deep nesting or layered control flow.
+- Minimize nested function definitions. Use them only when required by a callback API or when keeping the closure local is clearly simpler than adding another symbol.
+- Avoid adding package-level or module-level helper functions that have only one caller and do not express a stable business concept. Inline that logic at the call site instead.
+- A separate function is appropriate when it represents reusable behavior, a required interface/framework callback, an exported API, a test fixture, or complex business logic that deserves direct tests.
+- If a single-use helper is kept, its name must describe a durable domain concept rather than a mechanical step extracted only to shorten the caller.
+
+### Rule 1: Backend And JSON Rules
+
+**relaykit module independence:** The `relaykit/` Go module MUST remain independently buildable.
+
+- Code under `relaykit/` MUST NOT import or depend on packages from the root `new-api` module, or rely on root-only configuration, generated files, or workspace wiring.
+- Any change affecting `relaykit/` or its public APIs MUST be verified with `cd relaykit && GOWORK=off go build ./...`; a successful root-module build is not sufficient.
+
+**JSON package:** All JSON marshal/unmarshal operations MUST use the wrapper functions in `common/json.go`:
 
 - `common.Marshal(v any) ([]byte, error)`
 - `common.Unmarshal(data []byte, v any) error`

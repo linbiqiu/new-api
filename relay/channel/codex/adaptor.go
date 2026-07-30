@@ -21,6 +21,16 @@ import (
 type Adaptor struct {
 }
 
+var clientContextHeaders = []string{
+	"Originator",
+	"X-Codex-Beta-Features",
+	"X-Codex-Turn-Metadata",
+	"X-Codex-Window-Id",
+	"X-Client-Request-Id",
+	"Session-Id",
+	"Thread-Id",
+}
+
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
 	return nil, errors.New("codex channel: endpoint not supported")
 }
@@ -153,6 +163,13 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
+	if c != nil && c.Request != nil {
+		for _, name := range clientContextHeaders {
+			if value := c.Request.Header.Get(name); value != "" {
+				req.Set(name, value)
+			}
+		}
+	}
 
 	key := strings.TrimSpace(info.ApiKey)
 	if !strings.HasPrefix(key, "{") {
