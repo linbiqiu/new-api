@@ -85,6 +85,7 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		}
 		// Model quota observation (non-blocking, does not affect billing)
 		if err := recordModelQuotaFromContext(ctx, actualQuota, actualTokens); err != nil {
+			RecordUsageGovernanceCounterError()
 			logger.LogError(ctx, "record usage limit counters failed: "+err.Error())
 		}
 		return nil
@@ -100,6 +101,7 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 
 	// Model quota observation (non-blocking, does not affect billing)
 	if err := recordModelQuotaFromContext(ctx, actualQuota, actualTokens); err != nil {
+		RecordUsageGovernanceCounterError()
 		logger.LogError(ctx, "record usage limit counters failed: "+err.Error())
 	}
 	return nil

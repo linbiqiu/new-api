@@ -225,6 +225,7 @@ func checkModelQuotaRuleUsage(userId int, modelName string, preQuota int, rule *
 	if common.RedisEnabled {
 		cached, ok, cacheErr := model.CacheGetModelQuotaUsage(usage.Id)
 		if cacheErr != nil {
+			RecordUsageGovernanceRedisFallback()
 			common.SysError(fmt.Sprintf("model quota cache fallback for usage %d: %v", usage.Id, cacheErr))
 		} else if ok {
 			snapshot = cached

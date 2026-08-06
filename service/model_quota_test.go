@@ -525,9 +525,8 @@ func TestCheckModelQuota_UserRuleBlocksIndependently(t *testing.T) {
 	require.Equal(t, types.ErrorCodeModelAmountLimitInsufficient, result.APIError.GetErrorCode())
 }
 
-// TestCheckModelQuota_UserRuleDeletedStopsBlocking verifies the cascade-delete
-// fix: after a user rule is deleted, the user is no longer blocked by stale
-// usage snapshots.
+// TestCheckModelQuota_UserRuleDeletedStopsBlocking verifies that deleting a
+// rule stops enforcement while preserving its historical usage snapshot.
 func TestCheckModelQuota_UserRuleDeletedStopsBlocking(t *testing.T) {
 	setupModelQuotaTestDB(t)
 	t.Cleanup(func() {
@@ -548,9 +547,11 @@ func TestCheckModelQuota_UserRuleDeletedStopsBlocking(t *testing.T) {
 	require.True(t, result1.Passed)
 	require.Len(t, result1.UsageIDs, 1)
 
-	// Delete the rule (controller path cascades to usage)
+	// Delete only the rule; historical usage remains available for audit.
 	require.NoError(t, model.DB.Delete(&model.ModelQuotaUserRule{}, userRule.Id).Error)
-	require.NoError(t, model.DeleteUserModelQuotaUsageByRule(userRule.Id, model.ModelQuotaRuleSourceUser))
+	var historicalCount int64
+	require.NoError(t, model.DB.Model(&model.UserModelQuotaUsage{}).Where("rule_id = ? AND rule_source = ?", userRule.Id, model.ModelQuotaRuleSourceUser).Count(&historicalCount).Error)
+	require.EqualValues(t, 1, historicalCount)
 
 	// After deletion, the user should not be blocked anymore
 	result2, err := CheckPreFundingModelQuota(801, "gpt-5.5", "default", 100000)

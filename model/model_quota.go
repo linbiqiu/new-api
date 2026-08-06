@@ -433,28 +433,45 @@ func DeleteUserModelQuotaUsageByRule(ruleId int, ruleSource string) error {
 		Delete(&UserModelQuotaUsage{}).Error
 }
 
-// SyncUserModelQuotaLimitByRule updates the quota_limit on all active usage
-// records for a given rule, and refreshes their Redis caches. Called when an
-// admin adjusts a rule's quota_limit so that existing users immediately get
-// the new limit.
-func SyncUserModelQuotaLimitByRule(ruleId int, ruleSource string, newLimit int64) error {
+func SyncUserModelQuotaLimitsByRule(ruleId int, ruleSource string, quotaLimit, tokenLimit int64) error {
 	var usages []*UserModelQuotaUsage
 	if err := DB.Where("rule_id = ? AND rule_source = ? AND status = ?", ruleId, ruleSource, ModelQuotaUsageStatusActive).
 		Find(&usages).Error; err != nil {
 		return err
 	}
+	if err := DB.Model(&UserModelQuotaUsage{}).
+		Where("rule_id = ? AND rule_source = ? AND status = ?", ruleId, ruleSource, ModelQuotaUsageStatusActive).
+		Updates(map[string]any{"quota_limit": quotaLimit, "token_limit": tokenLimit, "updated_at": common.GetTimestamp()}).Error; err != nil {
+		return err
+	}
 	for _, u := range usages {
-		// Refresh Redis cache with new limit
+		u.QuotaLimit = quotaLimit
+		u.TokenLimit = tokenLimit
 		_ = CacheSetModelQuotaUsage(u.Id, ModelQuotaUsageSnapshot{
 			QuotaUsed:  u.QuotaUsed,
-			QuotaLimit: newLimit,
+			QuotaLimit: quotaLimit,
 			TokenUsed:  u.TokenUsed,
-			TokenLimit: u.TokenLimit,
+			TokenLimit: tokenLimit,
 		}, u.PeriodEnd)
 	}
-	return DB.Model(&UserModelQuotaUsage{}).
+	return nil
+}
+
+func ArchiveUserModelQuotaUsageByRule(ruleId int, ruleSource string) error {
+	var usages []*UserModelQuotaUsage
+	if err := DB.Where("rule_id = ? AND rule_source = ? AND status = ?", ruleId, ruleSource, ModelQuotaUsageStatusActive).
+		Find(&usages).Error; err != nil {
+		return err
+	}
+	if err := DB.Model(&UserModelQuotaUsage{}).
 		Where("rule_id = ? AND rule_source = ? AND status = ?", ruleId, ruleSource, ModelQuotaUsageStatusActive).
-		UpdateColumn("quota_limit", newLimit).Error
+		Updates(map[string]any{"status": ModelQuotaUsageStatusExpired, "updated_at": common.GetTimestamp()}).Error; err != nil {
+		return err
+	}
+	for _, usage := range usages {
+		CacheDeleteModelQuotaUsage(usage.Id)
+	}
+	return nil
 }
 
 // BatchUpdateModelQuotaUsage is called by the batch updater to flush accumulated deltas

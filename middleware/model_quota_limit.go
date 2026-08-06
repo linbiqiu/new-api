@@ -43,9 +43,11 @@ func ModelQuotaLimit() gin.HandlerFunc {
 
 		// Estimate pre-consume quota (conservative: use model price if available)
 		preQuota := estimateModelQuota(modelName)
+		service.RecordUsageGovernanceCheck()
 
 		result, err := service.CheckPreFundingModelQuota(userId, modelName, userGroup, preQuota)
 		if err != nil {
+			service.RecordUsageGovernanceUnavailable()
 			common.SysError("model quota check error: " + err.Error())
 			apiError := types.NewErrorWithStatusCode(
 				errors.New("用量校验暂时不可用，请稍后重试。"),
@@ -58,6 +60,7 @@ func ModelQuotaLimit() gin.HandlerFunc {
 		}
 
 		if !result.Passed {
+			service.RecordUsageGovernanceRejected()
 			if result.APIError == nil {
 				apiError := types.NewErrorWithStatusCode(
 					errors.New("用量校验暂时不可用，请稍后重试。"),
