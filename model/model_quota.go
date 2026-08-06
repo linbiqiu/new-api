@@ -403,7 +403,12 @@ func SyncUserModelQuotaLimitByRule(ruleId int, ruleSource string, newLimit int64
 	}
 	for _, u := range usages {
 		// Refresh Redis cache with new limit
-		CacheSetModelQuotaUsage(u.Id, u.QuotaUsed, newLimit, u.PeriodEnd)
+		_ = CacheSetModelQuotaUsage(u.Id, ModelQuotaUsageSnapshot{
+			QuotaUsed:  u.QuotaUsed,
+			QuotaLimit: newLimit,
+			TokenUsed:  u.TokenUsed,
+			TokenLimit: u.TokenLimit,
+		}, u.PeriodEnd)
 	}
 	return DB.Model(&UserModelQuotaUsage{}).
 		Where("rule_id = ? AND rule_source = ? AND status = ?", ruleId, ruleSource, ModelQuotaUsageStatusActive).
