@@ -83,3 +83,51 @@ func TestCreateNotificationEventConcurrentIsIdempotent(t *testing.T) {
 	}
 	require.Equal(t, 1, createdCount)
 }
+
+func TestNotificationEventClaimUsesLeaseAndCAS(t *testing.T) {
+	setupUsageNotificationTest(t)
+	event := UserNotificationEvent{UserID: 42, EventType: NotificationEventDailyTokenMilestone, EventKey: "2026-08-06:100", Payload: `{}`}
+	created, err := CreateNotificationEvent(&event)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	claimed, ok, err := ClaimNotificationEvent(event.ID, "runner-a", 100, 220)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1, claimed.Attempts)
+	_, ok, err = ClaimNotificationEvent(event.ID, "runner-b", 101, 221)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	reclaimed, ok, err := ClaimNotificationEvent(event.ID, "runner-b", 221, 341)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, reclaimed.Attempts)
+	marked, err := MarkNotificationEventSent(event.ID, "runner-a", 222)
+	require.NoError(t, err)
+	require.False(t, marked)
+	marked, err = MarkNotificationEventSent(event.ID, "runner-b", 222)
+	require.NoError(t, err)
+	require.True(t, marked)
+}
+
+func TestNotificationEventFailureTransitions(t *testing.T) {
+	setupUsageNotificationTest(t)
+	event := UserNotificationEvent{UserID: 42, EventType: NotificationEventSubscription80, EventKey: "7:100:80", Payload: `{}`}
+	_, err := CreateNotificationEvent(&event)
+	require.NoError(t, err)
+	claimed, ok, err := ClaimNotificationEvent(event.ID, "runner", 100, 220)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1, claimed.Attempts)
+
+	marked, err := MarkNotificationEventFailed(event.ID, "runner", false, 160, 101, "temporary")
+	require.NoError(t, err)
+	require.True(t, marked)
+	due, err := FindDueNotificationEvents(159, 50)
+	require.NoError(t, err)
+	require.Empty(t, due)
+	due, err = FindDueNotificationEvents(160, 50)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+}

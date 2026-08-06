@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
@@ -85,4 +86,70 @@ func CreateNotificationEvent(event *UserNotificationEvent) (bool, error) {
 	event.UpdatedAt = now
 	result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(event)
 	return result.RowsAffected == 1, result.Error
+}
+
+func FindDueNotificationEvents(now int64, limit int) ([]UserNotificationEvent, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 50
+	}
+	var events []UserNotificationEvent
+	err := DB.Where(
+		"(status = ? AND next_retry_at <= ?) OR (status = ? AND lease_until < ?)",
+		NotificationStatusPending, now, NotificationStatusSending, now,
+	).Order("id asc").Limit(limit).Find(&events).Error
+	return events, err
+}
+
+func ClaimNotificationEvent(id int64, runnerID string, now, leaseUntil int64) (*UserNotificationEvent, bool, error) {
+	if id <= 0 || strings.TrimSpace(runnerID) == "" || leaseUntil <= now {
+		return nil, false, fmt.Errorf("notification event claim is invalid")
+	}
+	result := DB.Model(&UserNotificationEvent{}).
+		Where("id = ? AND ((status = ? AND next_retry_at <= ?) OR (status = ? AND lease_until < ?))",
+			id, NotificationStatusPending, now, NotificationStatusSending, now).
+		Updates(map[string]any{
+			"status": NotificationStatusSending, "locked_by": runnerID,
+			"lease_until": leaseUntil, "attempts": gorm.Expr("attempts + 1"), "updated_at": now,
+		})
+	if result.Error != nil || result.RowsAffected == 0 {
+		return nil, false, result.Error
+	}
+	var event UserNotificationEvent
+	if err := DB.First(&event, id).Error; err != nil {
+		return nil, false, err
+	}
+	return &event, true, nil
+}
+
+func MarkNotificationEventSent(id int64, runnerID string, now int64) (bool, error) {
+	result := DB.Model(&UserNotificationEvent{}).
+		Where("id = ? AND status = ? AND locked_by = ?", id, NotificationStatusSending, runnerID).
+		Updates(map[string]any{
+			"status": NotificationStatusSent, "sent_at": now, "locked_by": "",
+			"lease_until": 0, "last_error": "", "updated_at": now,
+		})
+	return result.RowsAffected == 1, result.Error
+}
+
+func MarkNotificationEventFailed(id int64, runnerID string, final bool, nextRetryAt, now int64, lastError string) (bool, error) {
+	if len(lastError) > 1000 {
+		lastError = lastError[:1000]
+	}
+	status := NotificationStatusPending
+	if final {
+		status = NotificationStatusFailed
+	}
+	result := DB.Model(&UserNotificationEvent{}).
+		Where("id = ? AND status = ? AND locked_by = ?", id, NotificationStatusSending, runnerID).
+		Updates(map[string]any{
+			"status": status, "next_retry_at": nextRetryAt, "locked_by": "",
+			"lease_until": 0, "last_error": lastError, "updated_at": now,
+		})
+	return result.RowsAffected == 1, result.Error
+}
+
+func CountNotificationEventsByStatus(status string) (int64, error) {
+	var count int64
+	err := DB.Model(&UserNotificationEvent{}).Where("status = ?", status).Count(&count).Error
+	return count, err
 }
