@@ -272,6 +272,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := mergeDuplicateModelQuotaUsage(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -319,6 +322,9 @@ func migrateDB() error {
 		&AutoGroupLearnedRule{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := initializeModelQuotaRuleScopes(); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {

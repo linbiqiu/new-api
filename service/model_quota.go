@@ -272,7 +272,7 @@ func getOrCreateModelQuotaUsage(userId int, rule *matchedRule, subscriptionId in
 // RecordModelQuotaUsage updates the usage counters after a request completes
 func RecordModelQuotaUsage(usageIds []int, actualQuota int) {
 	for _, id := range usageIds {
-		if err := model.IncreaseUserModelQuotaUsage(id, int64(actualQuota)); err != nil {
+		if err := model.IncreaseUserModelQuotaUsage(id, int64(actualQuota), 0); err != nil {
 			common.SysError(fmt.Sprintf("failed to record model quota usage %d: %v", id, err))
 		}
 	}

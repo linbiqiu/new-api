@@ -31,6 +31,7 @@ func TestCreateModelQuotaGroupRule(t *testing.T) {
 	require.Equal(t, "default", fetched.GroupName)
 	require.Equal(t, "gpt-5.5", fetched.ModelPattern)
 	require.Equal(t, ModelQuotaMatchModeExact, fetched.MatchMode)
+	require.Equal(t, ModelQuotaScopeModel, fetched.Scope)
 	require.EqualValues(t, 500000, fetched.QuotaLimit)
 	require.True(t, fetched.Enabled)
 }
@@ -148,11 +149,12 @@ func TestIncreaseUserModelQuotaUsage(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(usage).Error)
 
-	require.NoError(t, IncreaseUserModelQuotaUsage(usage.Id, 50))
+	require.NoError(t, IncreaseUserModelQuotaUsage(usage.Id, 50, 25))
 
 	var updated UserModelQuotaUsage
 	require.NoError(t, DB.First(&updated, usage.Id).Error)
 	require.EqualValues(t, 150, updated.QuotaUsed)
+	require.EqualValues(t, 25, updated.TokenUsed)
 }
 
 func TestIncreaseUserModelQuotaUsage_Negative(t *testing.T) {
@@ -169,11 +171,8 @@ func TestIncreaseUserModelQuotaUsage_Negative(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(usage).Error)
 
-	require.NoError(t, IncreaseUserModelQuotaUsage(usage.Id, -100))
-
-	var updated UserModelQuotaUsage
-	require.NoError(t, DB.First(&updated, usage.Id).Error)
-	require.EqualValues(t, 100, updated.QuotaUsed)
+	require.ErrorContains(t, IncreaseUserModelQuotaUsage(usage.Id, -100, 0), "delta must be non-negative")
+	require.ErrorContains(t, IncreaseUserModelQuotaUsage(usage.Id, 0, -100), "delta must be non-negative")
 }
 
 func TestResetUserModelQuotaUsage(t *testing.T) {
@@ -184,7 +183,7 @@ func TestResetUserModelQuotaUsage(t *testing.T) {
 
 	usage := &UserModelQuotaUsage{
 		UserId: 301, RuleId: 1, RuleSource: ModelQuotaRuleSourceGroup,
-		ModelPattern: "gpt-5.5", QuotaLimit: 1000, QuotaUsed: 800,
+		ModelPattern: "gpt-5.5", QuotaLimit: 1000, QuotaUsed: 800, TokenLimit: 2000, TokenUsed: 1200,
 		PeriodStart: 1000, PeriodEnd: 99999, Status: ModelQuotaUsageStatusActive,
 	}
 	require.NoError(t, DB.Create(usage).Error)
@@ -194,6 +193,61 @@ func TestResetUserModelQuotaUsage(t *testing.T) {
 	var updated UserModelQuotaUsage
 	require.NoError(t, DB.First(&updated, usage.Id).Error)
 	require.EqualValues(t, 0, updated.QuotaUsed)
+	require.EqualValues(t, 0, updated.TokenUsed)
+}
+
+func TestCreateAllScopeRuleStoresTokenLimit(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&ModelQuotaGroupRule{}))
+	t.Cleanup(func() { DB.Exec("DELETE FROM model_quota_group_rules") })
+
+	rule := &ModelQuotaGroupRule{GroupName: "default", Scope: ModelQuotaScopeAll, TokenLimit: 100_000_000, Enabled: true}
+	require.NoError(t, DB.Create(rule).Error)
+
+	var stored ModelQuotaGroupRule
+	require.NoError(t, DB.First(&stored, rule.Id).Error)
+	require.Equal(t, ModelQuotaScopeAll, stored.Scope)
+	require.EqualValues(t, 100_000_000, stored.TokenLimit)
+}
+
+func TestInitializeModelQuotaRuleScopesNormalizesHistoricalRows(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&ModelQuotaGroupRule{}, &ModelQuotaPlanRule{}, &ModelQuotaUserRule{}))
+	t.Cleanup(func() {
+		DB.Exec("DELETE FROM model_quota_group_rules")
+		DB.Exec("DELETE FROM model_quota_plan_rules")
+		DB.Exec("DELETE FROM model_quota_user_rules")
+	})
+
+	groupRule := ModelQuotaGroupRule{GroupName: "default", Enabled: true}
+	planRule := ModelQuotaPlanRule{PlanId: 10, Enabled: true}
+	userRule := ModelQuotaUserRule{UserId: 20, Enabled: true}
+	require.NoError(t, DB.Create(&groupRule).Error)
+	require.NoError(t, DB.Create(&planRule).Error)
+	require.NoError(t, DB.Create(&userRule).Error)
+	require.NoError(t, DB.Model(&groupRule).UpdateColumn("scope", "").Error)
+	require.NoError(t, DB.Model(&planRule).UpdateColumn("scope", "").Error)
+	require.NoError(t, DB.Model(&userRule).UpdateColumn("scope", "").Error)
+
+	require.NoError(t, initializeModelQuotaRuleScopes())
+	for _, rule := range []any{&groupRule, &planRule, &userRule} {
+		require.NoError(t, DB.First(rule).Error)
+	}
+	require.Equal(t, ModelQuotaScopeModel, groupRule.Scope)
+	require.Equal(t, ModelQuotaScopeModel, planRule.Scope)
+	require.Equal(t, ModelQuotaScopeModel, userRule.Scope)
+}
+
+func TestUserModelQuotaUsageUniqueIdentity(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&UserModelQuotaUsage{}))
+	t.Cleanup(func() { DB.Exec("DELETE FROM user_model_quota_usage") })
+
+	usage := UserModelQuotaUsage{
+		UserId: 501, RuleId: 9, RuleSource: ModelQuotaRuleSourcePlan,
+		SubscriptionId: 11, ModelPattern: "*", PeriodStart: 100, PeriodEnd: 200,
+		Status: ModelQuotaUsageStatusActive,
+	}
+	require.NoError(t, DB.Create(&usage).Error)
+	usage.Id = 0
+	require.Error(t, DB.Create(&usage).Error)
 }
 
 func TestExpireUserModelQuotaUsage(t *testing.T) {

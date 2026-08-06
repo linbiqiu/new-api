@@ -1,8 +1,10 @@
 package model
 
 import (
+	"fmt"
+	"math"
+
 	"github.com/QuantumNous/new-api/common"
-	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
 
@@ -10,6 +12,11 @@ import (
 const (
 	ModelQuotaMatchModeExact  = "exact"
 	ModelQuotaMatchModePrefix = "prefix"
+)
+
+const (
+	ModelQuotaScopeModel = "model"
+	ModelQuotaScopeAll   = "all"
 )
 
 // Rule sources
@@ -40,10 +47,12 @@ const (
 type ModelQuotaGroupRule struct {
 	Id           int    `json:"id" gorm:"primaryKey"`
 	GroupName    string `json:"group_name" gorm:"column:group_name;type:varchar(64);not null;index:idx_group_rules"`
+	Scope        string `json:"scope" gorm:"column:scope;type:varchar(16);not null;default:'model'"`
 	ModelPattern string `json:"model_pattern" gorm:"column:model_pattern;type:varchar(128);not null"`
 	MatchMode    string `json:"match_mode" gorm:"column:match_mode;type:varchar(16);not null;default:'exact'"`
 	Period       string `json:"period" gorm:"column:period;type:varchar(16);not null;default:'total'"`
 	QuotaLimit   int64  `json:"quota_limit" gorm:"column:quota_limit;type:bigint;not null;default:0"`
+	TokenLimit   int64  `json:"token_limit" gorm:"column:token_limit;type:bigint;not null;default:0"`
 	Enabled      bool   `json:"enabled" gorm:"column:enabled;index:idx_group_rules"`
 	SortOrder    int    `json:"sort_order" gorm:"column:sort_order;type:int;default:0"`
 	CreatedAt    int64  `json:"created_at" gorm:"column:created_at;type:bigint"`
@@ -51,6 +60,9 @@ type ModelQuotaGroupRule struct {
 }
 
 func (r *ModelQuotaGroupRule) BeforeCreate(tx *gorm.DB) error {
+	if r.Scope == "" {
+		r.Scope = ModelQuotaScopeModel
+	}
 	now := common.GetTimestamp()
 	r.CreatedAt = now
 	r.UpdatedAt = now
@@ -82,9 +94,11 @@ func GetModelQuotaGroupRulesByGroup(groupName string) ([]*ModelQuotaGroupRule, e
 type ModelQuotaPlanRule struct {
 	Id           int    `json:"id" gorm:"primaryKey"`
 	PlanId       int    `json:"plan_id" gorm:"column:plan_id;type:int;not null;index:idx_plan_rules"`
+	Scope        string `json:"scope" gorm:"column:scope;type:varchar(16);not null;default:'model'"`
 	ModelPattern string `json:"model_pattern" gorm:"column:model_pattern;type:varchar(128);not null"`
 	MatchMode    string `json:"match_mode" gorm:"column:match_mode;type:varchar(16);not null;default:'exact'"`
 	QuotaLimit   int64  `json:"quota_limit" gorm:"column:quota_limit;type:bigint;not null;default:0"`
+	TokenLimit   int64  `json:"token_limit" gorm:"column:token_limit;type:bigint;not null;default:0"`
 	Enabled      bool   `json:"enabled" gorm:"column:enabled;index:idx_plan_rules"`
 	SortOrder    int    `json:"sort_order" gorm:"column:sort_order;type:int;default:0"`
 	CreatedAt    int64  `json:"created_at" gorm:"column:created_at;type:bigint"`
@@ -92,6 +106,9 @@ type ModelQuotaPlanRule struct {
 }
 
 func (r *ModelQuotaPlanRule) BeforeCreate(tx *gorm.DB) error {
+	if r.Scope == "" {
+		r.Scope = ModelQuotaScopeModel
+	}
 	now := common.GetTimestamp()
 	r.CreatedAt = now
 	r.UpdatedAt = now
@@ -124,10 +141,12 @@ type ModelQuotaUserRule struct {
 	Id           int    `json:"id" gorm:"primaryKey"`
 	UserId       int    `json:"user_id" gorm:"column:user_id;type:int;not null;index:idx_user_rules"`
 	Username     string `json:"username" gorm:"column:username;type:varchar(64);not null;default:''"` // 冗余字段，方便 admin 列表展示
+	Scope        string `json:"scope" gorm:"column:scope;type:varchar(16);not null;default:'model'"`
 	ModelPattern string `json:"model_pattern" gorm:"column:model_pattern;type:varchar(128);not null"`
 	MatchMode    string `json:"match_mode" gorm:"column:match_mode;type:varchar(16);not null;default:'exact'"`
 	Period       string `json:"period" gorm:"column:period;type:varchar(16);not null;default:'total'"`
 	QuotaLimit   int64  `json:"quota_limit" gorm:"column:quota_limit;type:bigint;not null;default:0"`
+	TokenLimit   int64  `json:"token_limit" gorm:"column:token_limit;type:bigint;not null;default:0"`
 	Enabled      bool   `json:"enabled" gorm:"column:enabled;index:idx_user_rules"`
 	SortOrder    int    `json:"sort_order" gorm:"column:sort_order;type:int;default:0"`
 	CreatedAt    int64  `json:"created_at" gorm:"column:created_at;type:bigint"`
@@ -135,6 +154,9 @@ type ModelQuotaUserRule struct {
 }
 
 func (r *ModelQuotaUserRule) BeforeCreate(tx *gorm.DB) error {
+	if r.Scope == "" {
+		r.Scope = ModelQuotaScopeModel
+	}
 	now := common.GetTimestamp()
 	r.CreatedAt = now
 	r.UpdatedAt = now
@@ -165,15 +187,17 @@ func GetModelQuotaUserRulesByUserId(userId int) ([]*ModelQuotaUserRule, error) {
 
 type UserModelQuotaUsage struct {
 	Id             int    `json:"id" gorm:"primaryKey"`
-	UserId         int    `json:"user_id" gorm:"column:user_id;type:int;not null;index:idx_user_period,priority:1"`
-	RuleId         int    `json:"rule_id" gorm:"column:rule_id;type:int;not null"`
-	RuleSource     string `json:"rule_source" gorm:"column:rule_source;type:varchar(16);not null;default:'group'"`
+	UserId         int    `json:"user_id" gorm:"column:user_id;type:int;not null;index:idx_user_period,priority:1;uniqueIndex:idx_usage_identity,priority:1"`
+	RuleId         int    `json:"rule_id" gorm:"column:rule_id;type:int;not null;uniqueIndex:idx_usage_identity,priority:3"`
+	RuleSource     string `json:"rule_source" gorm:"column:rule_source;type:varchar(16);not null;default:'group';uniqueIndex:idx_usage_identity,priority:2"`
 	ModelPattern   string `json:"model_pattern" gorm:"column:model_pattern;type:varchar(128);not null"`
-	SubscriptionId int    `json:"subscription_id" gorm:"column:subscription_id;type:int;default:0"`
+	SubscriptionId int    `json:"subscription_id" gorm:"column:subscription_id;type:int;default:0;uniqueIndex:idx_usage_identity,priority:4"`
 	QuotaLimit     int64  `json:"quota_limit" gorm:"column:quota_limit;type:bigint;not null;default:0"`
 	QuotaUsed      int64  `json:"quota_used" gorm:"column:quota_used;type:bigint;not null;default:0"`
-	PeriodStart    int64  `json:"period_start" gorm:"column:period_start;type:bigint"`
-	PeriodEnd      int64  `json:"period_end" gorm:"column:period_end;type:bigint;index:idx_user_period,priority:2"`
+	TokenLimit     int64  `json:"token_limit" gorm:"column:token_limit;type:bigint;not null;default:0"`
+	TokenUsed      int64  `json:"token_used" gorm:"column:token_used;type:bigint;not null;default:0"`
+	PeriodStart    int64  `json:"period_start" gorm:"column:period_start;type:bigint;uniqueIndex:idx_usage_identity,priority:5"`
+	PeriodEnd      int64  `json:"period_end" gorm:"column:period_end;type:bigint;index:idx_user_period,priority:2;uniqueIndex:idx_usage_identity,priority:6"`
 	Status         string `json:"status" gorm:"column:status;type:varchar(16);not null;default:'active';index:idx_user_period,priority:3"`
 	CreatedAt      int64  `json:"created_at" gorm:"column:created_at;type:bigint"`
 	UpdatedAt      int64  `json:"updated_at" gorm:"column:updated_at;type:bigint"`
@@ -193,6 +217,82 @@ func (u *UserModelQuotaUsage) BeforeUpdate(tx *gorm.DB) error {
 
 func (u *UserModelQuotaUsage) TableName() string {
 	return "user_model_quota_usage"
+}
+
+func initializeModelQuotaRuleScopes() error {
+	for _, table := range []any{&ModelQuotaGroupRule{}, &ModelQuotaPlanRule{}, &ModelQuotaUserRule{}} {
+		if err := DB.Model(table).Where("scope = ? OR scope IS NULL", "").Update("scope", ModelQuotaScopeModel).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mergeDuplicateModelQuotaUsage prepares historical data before AutoMigrate
+// creates the usage identity unique index.
+func mergeDuplicateModelQuotaUsage() error {
+	if !DB.Migrator().HasTable(&UserModelQuotaUsage{}) {
+		return nil
+	}
+
+	type identity struct {
+		UserId         int
+		RuleId         int
+		RuleSource     string
+		SubscriptionId int
+		PeriodStart    int64
+		PeriodEnd      int64
+	}
+	type historicalUsage struct {
+		Id             int
+		UserId         int
+		RuleId         int
+		RuleSource     string
+		SubscriptionId int
+		PeriodStart    int64
+		PeriodEnd      int64
+		QuotaUsed      int64
+		Status         string
+	}
+
+	var rows []historicalUsage
+	if err := DB.Table("user_model_quota_usage").
+		Select("id, user_id, rule_id, rule_source, subscription_id, period_start, period_end, quota_used, status").
+		Order("id ASC").Scan(&rows).Error; err != nil {
+		return err
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		canonical := make(map[identity]*historicalUsage, len(rows))
+		for i := range rows {
+			row := &rows[i]
+			key := identity{
+				UserId: row.UserId, RuleId: row.RuleId, RuleSource: row.RuleSource,
+				SubscriptionId: row.SubscriptionId, PeriodStart: row.PeriodStart, PeriodEnd: row.PeriodEnd,
+			}
+			first, exists := canonical[key]
+			if !exists {
+				canonical[key] = row
+				continue
+			}
+			if (row.QuotaUsed > 0 && first.QuotaUsed > math.MaxInt64-row.QuotaUsed) ||
+				(row.QuotaUsed < 0 && first.QuotaUsed < math.MinInt64-row.QuotaUsed) {
+				return fmt.Errorf("model quota usage overflow while merging duplicate records %d and %d", first.Id, row.Id)
+			}
+			first.QuotaUsed += row.QuotaUsed
+			if row.Status == ModelQuotaUsageStatusActive {
+				first.Status = ModelQuotaUsageStatusActive
+			}
+			if err := tx.Model(&UserModelQuotaUsage{}).Where("id = ?", first.Id).
+				Updates(map[string]any{"quota_used": first.QuotaUsed, "status": first.Status}).Error; err != nil {
+				return err
+			}
+			if err := tx.Delete(&UserModelQuotaUsage{}, row.Id).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // GetActiveUserModelQuotaUsage returns all active, non-expired usage records for a user
@@ -236,19 +336,16 @@ func GetUserModelQuotaUsageByUserId(userId int) ([]*UserModelQuotaUsage, error) 
 	return usages, err
 }
 
-// IncreaseUserModelQuotaUsage atomically increments quota_used by delta
-func IncreaseUserModelQuotaUsage(usageId int, delta int64) error {
-	// Redis cache update (async, non-blocking)
-	gopool.Go(func() {
-		CacheIncrModelQuotaUsage(usageId, delta)
-	})
-
-	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeModelQuotaUsage, usageId, int(delta))
-		return nil
+// IncreaseUserModelQuotaUsage atomically increments both usage metrics.
+func IncreaseUserModelQuotaUsage(usageId int, quotaDelta, tokenDelta int64) error {
+	if quotaDelta < 0 || tokenDelta < 0 {
+		return fmt.Errorf("usage delta must be non-negative: quota=%d tokens=%d", quotaDelta, tokenDelta)
 	}
-
-	return increaseModelQuotaUsageDB(usageId, delta)
+	return DB.Model(&UserModelQuotaUsage{}).Where("id = ?", usageId).Updates(map[string]any{
+		"quota_used": gorm.Expr("quota_used + ?", quotaDelta),
+		"token_used": gorm.Expr("token_used + ?", tokenDelta),
+		"updated_at": common.GetTimestamp(),
+	}).Error
 }
 
 func increaseModelQuotaUsageDB(usageId int, delta int64) error {
@@ -257,14 +354,14 @@ func increaseModelQuotaUsageDB(usageId int, delta int64) error {
 		UpdateColumn("quota_used", gorm.Expr("quota_used + ?", delta)).Error
 }
 
-// ResetUserModelQuotaUsage resets quota_used to 0
+// ResetUserModelQuotaUsage resets both usage metrics to 0.
 func ResetUserModelQuotaUsage(usageId int) error {
 	// Invalidate Redis cache
 	CacheDeleteModelQuotaUsage(usageId)
 
 	return DB.Model(&UserModelQuotaUsage{}).
 		Where("id = ?", usageId).
-		UpdateColumn("quota_used", 0).Error
+		Updates(map[string]any{"quota_used": 0, "token_used": 0, "updated_at": common.GetTimestamp()}).Error
 }
 
 // ExpireUserModelQuotaUsage marks a usage record as expired
