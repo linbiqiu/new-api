@@ -199,3 +199,27 @@ func TestAdminResetPlanSubscriptionsNoMatchSucceeds(t *testing.T) {
 	assert.Zero(t, result.UserCount)
 	assert.Empty(t, result.AffectedUserIds)
 }
+
+func TestPreConsumeSubscriptionReturnsTypedInsufficientDetails(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.AutoMigrate(&SubscriptionPreConsumeRecord{}))
+	t.Cleanup(func() { DB.Exec("DELETE FROM subscription_pre_consume_records") })
+
+	now := GetDBTimestamp()
+	plan := &SubscriptionPlan{
+		Title: "Limited", DurationUnit: SubscriptionDurationMonth,
+		DurationValue: 1, TotalAmount: 100, Enabled: true,
+	}
+	require.NoError(t, DB.Create(plan).Error)
+	subscription := &UserSubscription{
+		UserId: 902, PlanId: plan.Id, AmountTotal: 100, AmountUsed: 90,
+		StartTime: now - 60, EndTime: now + 3600, Status: "active",
+	}
+	require.NoError(t, DB.Create(subscription).Error)
+
+	_, err := PreConsumeUserSubscription("req-low-sub", 902, "gpt-5", 0, 20)
+	var quotaErr *SubscriptionQuotaInsufficientError
+	require.ErrorAs(t, err, &quotaErr)
+	require.EqualValues(t, 10, quotaErr.Remaining)
+	require.EqualValues(t, 20, quotaErr.Required)
+}

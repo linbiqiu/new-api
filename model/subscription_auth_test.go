@@ -148,3 +148,12 @@ func TestSubscriptionGroupCacheRefreshFailureDoesNotChangeCommittedResult(t *tes
 	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&subscription).Error)
 	assert.Equal(t, "active", subscription.Status)
 }
+
+func TestPreConsumeSubscriptionReturnsTypedUnavailableError(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.AutoMigrate(&SubscriptionPreConsumeRecord{}))
+	t.Cleanup(func() { DB.Exec("DELETE FROM subscription_pre_consume_records") })
+
+	_, err := PreConsumeUserSubscription("req-no-sub", 901, "gpt-5", 0, 10)
+	require.ErrorIs(t, err, ErrNoActiveSubscription)
+}

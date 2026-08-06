@@ -36,7 +36,17 @@ const (
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
+	ErrNoActiveSubscription           = errors.New("no active subscription")
 )
+
+type SubscriptionQuotaInsufficientError struct {
+	Remaining int64
+	Required  int64
+}
+
+func (e *SubscriptionQuotaInsufficientError) Error() string {
+	return fmt.Sprintf("subscription quota insufficient: remaining=%d required=%d", e.Remaining, e.Required)
+}
 
 const (
 	subscriptionPlanCacheNamespace     = "new-api:subscription_plan:v1"
@@ -1556,11 +1566,12 @@ func preConsumeUserSubscriptionInternal(requestId string, userId int, modelName 
 		if err := subQuery.
 			Order("end_time asc, id asc").
 			Find(&subs).Error; err != nil {
-			return errors.New("no active subscription")
+			return err
 		}
 		if len(subs) == 0 {
-			return errors.New("no active subscription")
+			return ErrNoActiveSubscription
 		}
+		var maxRemaining int64
 		for _, candidate := range subs {
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
@@ -1573,6 +1584,12 @@ func preConsumeUserSubscriptionInternal(requestId string, userId int, modelName 
 			usedBefore := sub.AmountUsed
 			if sub.AmountTotal > 0 {
 				remain := sub.AmountTotal - usedBefore
+				if remain < 0 {
+					remain = 0
+				}
+				if remain > maxRemaining {
+					maxRemaining = remain
+				}
 				if remain < amount {
 					continue
 				}
@@ -1610,7 +1627,7 @@ func preConsumeUserSubscriptionInternal(requestId string, userId int, modelName 
 			returnValue.AmountUsedAfter = sub.AmountUsed
 			return nil
 		}
-		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
+		return &SubscriptionQuotaInsufficientError{Remaining: maxRemaining, Required: amount}
 	})
 	if err != nil {
 		return nil, err
