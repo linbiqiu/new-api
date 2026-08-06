@@ -35,6 +35,13 @@ func CommonGroupColumnName() string {
 	return commonGroupCol
 }
 
+func CommonKeyColumnName() string {
+	if commonKeyCol == "" {
+		commonKeyCol = "`key`"
+	}
+	return commonKeyCol
+}
+
 func initCol() {
 	// init common column names
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {

@@ -1,10 +1,10 @@
 package service
 
 import (
+	"errors"
 	"fmt"
-	"net/http"
-	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -199,7 +199,11 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	// ---- 1) 预扣令牌额度 ----
 	if effectiveQuota > 0 {
 		if err := PreConsumeTokenQuota(s.relayInfo, effectiveQuota); err != nil {
-			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			var apiErr *types.NewAPIError
+			if errors.As(err, &apiErr) {
+				return apiErr
+			}
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		s.tokenConsumed = effectiveQuota
 	}
@@ -214,10 +218,10 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 			}
 			s.tokenConsumed = 0
 		}
-		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
-			return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		if s.funding.Source() == BillingSourceSubscription {
+			if apiErr := subscriptionFundingAPIError(s.relayInfo.UserId, err); apiErr != nil {
+				return apiErr
+			}
 		}
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
@@ -233,6 +237,13 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 func (s *BillingSession) reserveFunding(delta int) error {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
+		remaining, err := model.GetUserQuota(funding.userId, false)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		}
+		if remaining < delta {
+			return newWalletQuotaError(int64(remaining), int64(delta))
+		}
 		if err := model.DecreaseUserQuota(funding.userId, delta, false); err != nil {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
@@ -240,13 +251,15 @@ func (s *BillingSession) reserveFunding(delta int) error {
 		return nil
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, int64(delta)); err != nil {
-			return types.NewErrorWithStatusCode(
-				fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()),
-				types.ErrorCodeInsufficientUserQuota,
-				http.StatusForbidden,
-				types.ErrOptionWithSkipRetry(),
-				types.ErrOptionWithNoRecordErrorLog(),
-			)
+			var quotaErr *model.SubscriptionQuotaInsufficientError
+			if !errors.As(err, &quotaErr) {
+				return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			}
+			details, queryErr := activeSubscriptionQuotaErrorInput(funding.userId, quotaErr)
+			if queryErr != nil {
+				return types.NewError(queryErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+			}
+			return newSubscriptionQuotaError(details)
 		}
 		return nil
 	default:
@@ -274,7 +287,7 @@ func (s *BillingSession) reserveToken(delta int) error {
 		return nil
 	}
 	if err := PreConsumeTokenQuota(s.relayInfo, delta); err != nil {
-		return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		return err
 	}
 	return nil
 }
@@ -354,16 +367,10 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		}
 		if userQuota <= 0 {
-			return nil, types.NewErrorWithStatusCode(
-				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
-				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
-				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			return nil, newWalletQuotaError(int64(userQuota), int64(preConsumedQuota))
 		}
 		if userQuota-preConsumedQuota < 0 {
-			return nil, types.NewErrorWithStatusCode(
-				fmt.Errorf("预扣费额度失败, 用户剩余额度: %s, 需要预扣费额度: %s", logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
-				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
-				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			return nil, newWalletQuotaError(int64(userQuota), int64(preConsumedQuota))
 		}
 		relayInfo.UserQuota = userQuota
 
@@ -411,7 +418,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	case "wallet_first":
 		session, err := tryWallet()
 		if err != nil {
-			if err.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+			code := err.GetErrorCode()
+			if code == types.ErrorCodeWalletQuotaExhausted || code == types.ErrorCodeWalletQuotaInsufficient {
 				return trySubscription(isPersonalGroup)
 			}
 			return nil, err
@@ -435,7 +443,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		}
 		session, apiErr := trySubscription(isPersonalGroup)
 		if apiErr != nil {
-			if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+			code := apiErr.GetErrorCode()
+			if code == types.ErrorCodeSubscriptionPeriodExhausted || code == types.ErrorCodeSubscriptionPeriodInsufficient {
 				if isPersonalGroup {
 					// 个人付费分组：直接回退钱包，不检查公司订阅的 allowOverflow
 					return tryWallet()
@@ -454,4 +463,85 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		}
 		return session, nil
 	}
+}
+
+func subscriptionFundingAPIError(userID int, err error) *types.NewAPIError {
+	if errors.Is(err, model.ErrNoActiveSubscription) {
+		subscriptions, queryErr := model.GetAllUserSubscriptions(userID)
+		if queryErr != nil {
+			return types.NewError(queryErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		}
+		now := model.GetDBTimestamp()
+		for _, summary := range subscriptions {
+			subscription := summary.Subscription
+			if subscription == nil || subscription.EndTime <= 0 || subscription.EndTime > now {
+				continue
+			}
+			plan, planErr := model.GetSubscriptionPlanInfoByUserSubscriptionId(subscription.Id)
+			if planErr != nil {
+				return types.NewError(planErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+			}
+			return newSubscriptionExpiredError(plan.PlanTitle)
+		}
+		return newSubscriptionUnavailableError()
+	}
+
+	var quotaErr *model.SubscriptionQuotaInsufficientError
+	if !errors.As(err, &quotaErr) {
+		return nil
+	}
+	details, queryErr := activeSubscriptionQuotaErrorInput(userID, quotaErr)
+	if queryErr != nil {
+		return types.NewError(queryErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+	}
+	return newSubscriptionQuotaError(details)
+}
+
+func activeSubscriptionQuotaErrorInput(userID int, quotaErr *model.SubscriptionQuotaInsufficientError) (subscriptionQuotaErrorInput, error) {
+	subscriptions, err := model.GetAllActiveUserSubscriptions(userID)
+	if err != nil {
+		return subscriptionQuotaErrorInput{}, err
+	}
+	var selected *model.UserSubscription
+	var selectedRemaining int64 = -1
+	for _, summary := range subscriptions {
+		subscription := summary.Subscription
+		if subscription == nil || subscription.AmountTotal <= 0 {
+			continue
+		}
+		remaining := subscription.AmountTotal - subscription.AmountUsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		if remaining > selectedRemaining {
+			selected = subscription
+			selectedRemaining = remaining
+		}
+	}
+	if selected == nil {
+		return subscriptionQuotaErrorInput{}, model.ErrNoActiveSubscription
+	}
+	plan, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(selected.Id)
+	if err != nil {
+		return subscriptionQuotaErrorInput{}, err
+	}
+	resetTime := selected.NextResetTime
+	if resetTime <= 0 {
+		resetTime = selected.EndTime
+	}
+	return subscriptionQuotaErrorInput{
+		Plan: plan.PlanTitle, Remaining: quotaErr.Remaining, Required: quotaErr.Required,
+		ResetAt: formatQuotaResetTime(resetTime),
+	}, nil
+}
+
+func formatQuotaResetTime(timestamp int64) string {
+	if timestamp <= 0 {
+		return "当前周期结束时"
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("Asia/Shanghai", 8*60*60)
+	}
+	return time.Unix(timestamp, 0).In(location).Format("2006-01-02 15:04")
 }

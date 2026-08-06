@@ -1763,7 +1763,11 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 			newUsed = 0
 		}
 		if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
-			return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
+			remaining := sub.AmountTotal - sub.AmountUsed
+			if remaining < 0 {
+				remaining = 0
+			}
+			return &SubscriptionQuotaInsufficientError{Remaining: remaining, Required: delta}
 		}
 		sub.AmountUsed = newUsed
 		return tx.Save(&sub).Error
