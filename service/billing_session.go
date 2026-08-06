@@ -227,11 +227,46 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	}
 
 	s.preConsumedQuota = effectiveQuota
+	if subscription, ok := s.funding.(*SubscriptionFunding); ok {
+		result, checkErr := CheckFundedSubscriptionModelQuota(s.relayInfo.OriginModelName, s.relayInfo.UserId, subscription)
+		if checkErr != nil || !result.Passed {
+			if rollbackErr := s.rollbackPreConsume(); rollbackErr != nil {
+				common.SysLog(fmt.Sprintf("failed to roll back billing after plan usage limit rejection (userId=%d, subscriptionId=%d): %v", s.relayInfo.UserId, subscription.subscriptionId, rollbackErr))
+				return newUsageLimitCheckUnavailableError()
+			}
+			if checkErr != nil {
+				common.SysLog(fmt.Sprintf("failed to check funded subscription usage limit (userId=%d, subscriptionId=%d): %v", s.relayInfo.UserId, subscription.subscriptionId, checkErr))
+				return newUsageLimitCheckUnavailableError()
+			}
+			if result.APIError == nil {
+				return newUsageLimitCheckUnavailableError()
+			}
+			return result.APIError
+		}
+		appendModelQuotaUsageIDs(c, result.UsageIDs)
+	}
 
 	// ---- 同步 RelayInfo 兼容字段 ----
 	s.syncRelayInfo()
 
 	return nil
+}
+
+func (s *BillingSession) rollbackPreConsume() error {
+	var rollbackErrors []error
+	if err := s.funding.Refund(); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("refund funding: %w", err))
+	}
+	if s.tokenConsumed > 0 && !s.relayInfo.IsPlayground {
+		if err := model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, s.tokenConsumed); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("refund token quota: %w", err))
+		}
+	}
+	if len(rollbackErrors) == 0 {
+		s.preConsumedQuota = 0
+		s.tokenConsumed = 0
+	}
+	return errors.Join(rollbackErrors...)
 }
 
 func (s *BillingSession) reserveFunding(delta int) error {
