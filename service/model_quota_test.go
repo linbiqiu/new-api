@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/alicebob/miniredis/v2"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/require"
@@ -456,6 +457,40 @@ func TestCheckModelQuota_ExpiredUsageIgnored(t *testing.T) {
 	result, err := CheckPreFundingModelQuota(601, "gpt-5.5", "default", 100)
 	require.NoError(t, err)
 	require.True(t, result.Passed)
+}
+
+func TestRecordModelQuotaUsageStoresActualAmountAndTokens(t *testing.T) {
+	setupModelQuotaTestDB(t)
+	t.Cleanup(func() { model.DB.Exec("DELETE FROM user_model_quota_usage") })
+	usage := model.UserModelQuotaUsage{
+		UserId: 9901, RuleId: 9902, RuleSource: model.ModelQuotaRuleSourceUser,
+		ModelPattern: "*", QuotaLimit: 10_000, TokenLimit: 100_000,
+		PeriodStart: 1, PeriodEnd: 4_102_444_800, Status: model.ModelQuotaUsageStatusActive,
+	}
+	require.NoError(t, model.DB.Create(&usage).Error)
+
+	require.NoError(t, RecordModelQuotaUsage([]int{usage.Id}, 321, 12_345))
+	require.NoError(t, model.DB.First(&usage, usage.Id).Error)
+	require.EqualValues(t, 321, usage.QuotaUsed)
+	require.EqualValues(t, 12_345, usage.TokenUsed)
+}
+
+func TestRecordModelQuotaFromContextIsIdempotent(t *testing.T) {
+	setupModelQuotaTestDB(t)
+	t.Cleanup(func() { model.DB.Exec("DELETE FROM user_model_quota_usage") })
+	usage := model.UserModelQuotaUsage{
+		UserId: 9903, RuleId: 9904, RuleSource: model.ModelQuotaRuleSourceUser,
+		ModelPattern: "*", PeriodStart: 1, PeriodEnd: 4_102_444_800,
+		Status: model.ModelQuotaUsageStatusActive,
+	}
+	require.NoError(t, model.DB.Create(&usage).Error)
+	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(modelQuotaUsageContextKey, []int{usage.Id})
+	require.NoError(t, recordModelQuotaFromContext(ctx, 50, 75))
+	require.NoError(t, recordModelQuotaFromContext(ctx, 50, 75))
+	require.NoError(t, model.DB.First(&usage, usage.Id).Error)
+	require.EqualValues(t, 50, usage.QuotaUsed)
+	require.EqualValues(t, 75, usage.TokenUsed)
 }
 
 // TestCheckModelQuota_UserRuleBlocksIndependently verifies that a personal

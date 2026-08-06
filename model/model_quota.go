@@ -341,11 +341,53 @@ func IncreaseUserModelQuotaUsage(usageId int, quotaDelta, tokenDelta int64) erro
 	if quotaDelta < 0 || tokenDelta < 0 {
 		return fmt.Errorf("usage delta must be non-negative: quota=%d tokens=%d", quotaDelta, tokenDelta)
 	}
-	return DB.Model(&UserModelQuotaUsage{}).Where("id = ?", usageId).Updates(map[string]any{
-		"quota_used": gorm.Expr("quota_used + ?", quotaDelta),
-		"token_used": gorm.Expr("token_used + ?", tokenDelta),
+	if err := DB.Model(&UserModelQuotaUsage{}).Where("id = ?", usageId).Updates(map[string]any{
+		"quota_used": gorm.Expr("CASE WHEN quota_used > ? THEN ? ELSE quota_used + ? END", math.MaxInt64-quotaDelta, int64(math.MaxInt64), quotaDelta),
+		"token_used": gorm.Expr("CASE WHEN token_used > ? THEN ? ELSE token_used + ? END", math.MaxInt64-tokenDelta, int64(math.MaxInt64), tokenDelta),
 		"updated_at": common.GetTimestamp(),
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	if err := CacheIncrModelQuotaUsage(usageId, quotaDelta, tokenDelta); err != nil {
+		CacheDeleteModelQuotaUsage(usageId)
+		common.SysError(fmt.Sprintf("usage %d persisted but cache update failed: %v", usageId, err))
+	}
+	return nil
+}
+
+func AdjustTaskModelQuotaUsage(usageIds []int, quotaDelta int64) error {
+	if len(usageIds) == 0 || quotaDelta == 0 {
+		return nil
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, usageId := range usageIds {
+			var usage UserModelQuotaUsage
+			if err := lockForUpdate(tx).Where("id = ?", usageId).First(&usage).Error; err != nil {
+				return err
+			}
+			if quotaDelta > 0 && usage.QuotaUsed > math.MaxInt64-quotaDelta {
+				return fmt.Errorf("task usage adjustment overflow for usage %d", usageId)
+			}
+			newUsed := usage.QuotaUsed + quotaDelta
+			if newUsed < 0 {
+				newUsed = 0
+			}
+			if err := tx.Model(&UserModelQuotaUsage{}).Where("id = ?", usageId).Updates(map[string]any{
+				"quota_used": newUsed,
+				"updated_at": common.GetTimestamp(),
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, usageId := range usageIds {
+		CacheDeleteModelQuotaUsage(usageId)
+	}
+	return nil
 }
 
 func increaseModelQuotaUsageDB(usageId int, delta int64) error {

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -173,6 +174,21 @@ func TestIncreaseUserModelQuotaUsage_Negative(t *testing.T) {
 
 	require.ErrorContains(t, IncreaseUserModelQuotaUsage(usage.Id, -100, 0), "delta must be non-negative")
 	require.ErrorContains(t, IncreaseUserModelQuotaUsage(usage.Id, 0, -100), "delta must be non-negative")
+}
+
+func TestIncreaseUserModelQuotaUsageSaturatesWithoutOverflow(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&UserModelQuotaUsage{}))
+	t.Cleanup(func() { DB.Exec("DELETE FROM user_model_quota_usage") })
+	usage := UserModelQuotaUsage{
+		UserId: 203, RuleId: 1, RuleSource: ModelQuotaRuleSourceGroup,
+		ModelPattern: "*", QuotaUsed: math.MaxInt64 - 2, TokenUsed: math.MaxInt64 - 3,
+		PeriodStart: 1, PeriodEnd: 4_102_444_800, Status: ModelQuotaUsageStatusActive,
+	}
+	require.NoError(t, DB.Create(&usage).Error)
+	require.NoError(t, IncreaseUserModelQuotaUsage(usage.Id, 10, 10))
+	require.NoError(t, DB.First(&usage, usage.Id).Error)
+	require.EqualValues(t, math.MaxInt64, usage.QuotaUsed)
+	require.EqualValues(t, math.MaxInt64, usage.TokenUsed)
 }
 
 func TestResetUserModelQuotaUsage(t *testing.T) {

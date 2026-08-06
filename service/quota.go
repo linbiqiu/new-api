@@ -228,7 +228,8 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
+	actualTokens := sumSettledTokens(usage.InputTokens, usage.OutputTokens)
+	if err := SettleBilling(ctx, relayInfo, quota, actualTokens); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
@@ -351,7 +352,8 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
+	actualTokens := sumSettledTokens(usage.PromptTokens, usage.CompletionTokens)
+	if err := SettleBilling(ctx, relayInfo, quota, actualTokens); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
