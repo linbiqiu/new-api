@@ -43,6 +43,19 @@ func TestAddUserDailyUsageRejectsNegativeDelta(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAddUserDailyUsageSaturatesInsteadOfOverflowing(t *testing.T) {
+	setupUsageNotificationTest(t)
+	require.NoError(t, DB.Create(&UserDailyUsageCounter{
+		UserID: 42, UsageDate: "2026-08-06",
+		QuotaUsed: maxUsageCounterValue - 1, TokenUsed: maxUsageCounterValue - 1,
+	}).Error)
+
+	usage, err := AddUserDailyUsage(42, "2026-08-06", 2, 2)
+	require.NoError(t, err)
+	require.Equal(t, maxUsageCounterValue, usage.QuotaUsed)
+	require.Equal(t, maxUsageCounterValue, usage.TokenUsed)
+}
+
 func TestCreateNotificationEventIsIdempotent(t *testing.T) {
 	setupUsageNotificationTest(t)
 

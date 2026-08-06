@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -70,7 +69,7 @@ func deliverUsageNotifications(ctx context.Context, runnerID string, now time.Ti
 		if !final {
 			nextRetryAt += int64(usageNotificationRetryDelays[event.Attempts-1].Seconds())
 		}
-		errorSummary := strings.TrimSpace(deliveryErr.Error())
+		errorSummary := "delivery failed"
 		marked, markErr := model.MarkNotificationEventFailed(event.ID, runnerID, final, nextRetryAt, nowUnix, errorSummary)
 		if markErr != nil {
 			return summary, markErr

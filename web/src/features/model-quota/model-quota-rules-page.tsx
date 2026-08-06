@@ -86,6 +86,19 @@ import type {
 
 type QuotaMode = 'add' | 'subtract' | 'override'
 
+function calculateQuotaLimit(
+  isEdit: boolean,
+  mode: QuotaMode,
+  currentQuota: number,
+  inputQuota: number,
+  amountValue: number
+) {
+  if (!isEdit) return inputQuota
+  if (mode === 'add') return currentQuota + inputQuota
+  if (mode === 'subtract') return Math.max(0, currentQuota - inputQuota)
+  return parseQuotaFromDollars(amountValue)
+}
+
 function getPeriodLabel(period?: ModelQuotaPeriod) {
   switch (period) {
     case 'daily':
@@ -873,6 +886,13 @@ function GroupRuleDialog({
   const amountValue = parseFloat(quotaAmount) || 0
   const inputQuota = parseQuotaFromDollars(Math.abs(amountValue))
   const parsedTokenLimit = tokenAmount ? parseMillionsToTokens(tokenAmount) : 0
+  const finalQuota = calculateQuotaLimit(
+    isEdit,
+    quotaMode,
+    currentQuota,
+    inputQuota,
+    amountValue
+  )
 
   const getPreviewText = () => {
     if (!isEdit) {
@@ -891,22 +911,6 @@ function GroupRuleDialog({
   }
 
   const handleSubmit = () => {
-    let finalQuota: number
-    if (!isEdit) {
-      finalQuota = inputQuota
-    } else {
-      switch (quotaMode) {
-        case 'add':
-          finalQuota = currentQuota + inputQuota
-          break
-        case 'subtract':
-          finalQuota = Math.max(0, currentQuota - inputQuota)
-          break
-        case 'override':
-          finalQuota = parseQuotaFromDollars(amountValue)
-          break
-      }
-    }
     onSubmit({
       group_name: groupName,
       scope,
@@ -930,7 +934,7 @@ function GroupRuleDialog({
         <DialogHeader>
           <DialogTitle>{rule ? t('编辑规则') : t('创建规则')}</DialogTitle>
           <DialogDescription>
-            {t('为此分组配置指定模型的额度限制。')}
+            {t('为此分组配置金额或 Token 用量限制。')}
           </DialogDescription>
         </DialogHeader>
         <div className='space-y-4 py-4'>
@@ -993,7 +997,7 @@ function GroupRuleDialog({
               </SelectContent>
             </Select>
             <p className='text-muted-foreground text-xs'>
-              {t('周期到期后会自动为用户重置该模型额度。')}
+              {t('周期到期后会自动重置该用户的用量。')}
             </p>
           </div>
           <div className='space-y-2'>
@@ -1066,8 +1070,8 @@ function GroupRuleDialog({
               !groupName ||
               parsedTokenLimit === null ||
               (scope === 'model'
-                ? !modelPattern || inputQuota <= 0
-                : inputQuota <= 0 && parsedTokenLimit <= 0)
+                ? !modelPattern || finalQuota <= 0
+                : finalQuota <= 0 && parsedTokenLimit <= 0)
             }
           >
             {isLoading && <Loader2 className='mr-2 size-4 animate-spin' />}
@@ -1123,6 +1127,13 @@ function PlanRuleDialog({
   const amountValue = parseFloat(quotaAmount) || 0
   const inputQuota = parseQuotaFromDollars(Math.abs(amountValue))
   const parsedTokenLimit = tokenAmount ? parseMillionsToTokens(tokenAmount) : 0
+  const finalQuota = calculateQuotaLimit(
+    isEdit,
+    quotaMode,
+    currentQuota,
+    inputQuota,
+    amountValue
+  )
 
   const getPreviewText = () => {
     if (!isEdit) {
@@ -1141,22 +1152,6 @@ function PlanRuleDialog({
   }
 
   const handleSubmit = () => {
-    let finalQuota: number
-    if (!isEdit) {
-      finalQuota = inputQuota
-    } else {
-      switch (quotaMode) {
-        case 'add':
-          finalQuota = currentQuota + inputQuota
-          break
-        case 'subtract':
-          finalQuota = Math.max(0, currentQuota - inputQuota)
-          break
-        case 'override':
-          finalQuota = parseQuotaFromDollars(amountValue)
-          break
-      }
-    }
     onSubmit({
       plan_id: parseInt(planId, 10),
       scope,
@@ -1179,7 +1174,7 @@ function PlanRuleDialog({
         <DialogHeader>
           <DialogTitle>{rule ? t('编辑规则') : t('创建规则')}</DialogTitle>
           <DialogDescription>
-            {t('为此订阅计划配置指定模型的额度限制。')}
+            {t('为此订阅计划配置金额或 Token 用量限制。')}
           </DialogDescription>
         </DialogHeader>
         <div className='space-y-4 py-4'>
@@ -1299,8 +1294,8 @@ function PlanRuleDialog({
               !planId ||
               parsedTokenLimit === null ||
               (scope === 'model'
-                ? !modelPattern || inputQuota <= 0
-                : inputQuota <= 0 && parsedTokenLimit <= 0)
+                ? !modelPattern || finalQuota <= 0
+                : finalQuota <= 0 && parsedTokenLimit <= 0)
             }
           >
             {isLoading && <Loader2 className='mr-2 size-4 animate-spin' />}
@@ -1359,6 +1354,13 @@ function UserRuleDialog({
   const amountValue = parseFloat(quotaAmount) || 0
   const inputQuota = parseQuotaFromDollars(Math.abs(amountValue))
   const parsedTokenLimit = tokenAmount ? parseMillionsToTokens(tokenAmount) : 0
+  const finalQuota = calculateQuotaLimit(
+    isEdit,
+    quotaMode,
+    currentQuota,
+    inputQuota,
+    amountValue
+  )
 
   const getPreviewText = () => {
     if (!isEdit) {
@@ -1377,22 +1379,6 @@ function UserRuleDialog({
   }
 
   const handleSubmit = () => {
-    let finalQuota: number
-    if (!isEdit) {
-      finalQuota = inputQuota
-    } else {
-      switch (quotaMode) {
-        case 'add':
-          finalQuota = currentQuota + inputQuota
-          break
-        case 'subtract':
-          finalQuota = Math.max(0, currentQuota - inputQuota)
-          break
-        case 'override':
-          finalQuota = parseQuotaFromDollars(amountValue)
-          break
-      }
-    }
     onSubmit({
       user_id: parseInt(userId, 10),
       scope,
@@ -1416,7 +1402,7 @@ function UserRuleDialog({
         <DialogHeader>
           <DialogTitle>{rule ? t('编辑规则') : t('创建规则')}</DialogTitle>
           <DialogDescription>
-            {t('为此用户单独配置指定模型的额度限制。')}
+            {t('为此用户单独配置金额或 Token 用量限制。')}
           </DialogDescription>
         </DialogHeader>
         <div className='space-y-4 py-4'>
@@ -1481,7 +1467,7 @@ function UserRuleDialog({
               </SelectContent>
             </Select>
             <p className='text-muted-foreground text-xs'>
-              {t('周期到期后会自动为该用户重置此模型额度。')}
+              {t('周期到期后会自动重置该用户的用量。')}
             </p>
           </div>
           <div className='space-y-2'>
@@ -1564,8 +1550,8 @@ function UserRuleDialog({
               !userId ||
               parsedTokenLimit === null ||
               (scope === 'model'
-                ? !modelPattern || inputQuota <= 0
-                : inputQuota <= 0 && parsedTokenLimit <= 0)
+                ? !modelPattern || finalQuota <= 0
+                : finalQuota <= 0 && parsedTokenLimit <= 0)
             }
           >
             {isLoading && <Loader2 className='mr-2 size-4 animate-spin' />}

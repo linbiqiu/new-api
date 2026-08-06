@@ -67,4 +67,5 @@ func TestUsageNotificationDeliveryMarksFifthFailureFinal(t *testing.T) {
 	require.NoError(t, model.DB.First(&stored, event.ID).Error)
 	require.Equal(t, model.NotificationStatusFailed, stored.Status)
 	require.Equal(t, 5, stored.Attempts)
+	require.Equal(t, "delivery failed", stored.LastError)
 }
