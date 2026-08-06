@@ -180,7 +180,7 @@ export function useSidebarData(): SidebarData {
             icon: Settings,
           },
           {
-            title: t('模型额度规则'),
+            title: t('用量限制规则'),
             url: '/model-quota-rules',
             icon: Shield,
           },

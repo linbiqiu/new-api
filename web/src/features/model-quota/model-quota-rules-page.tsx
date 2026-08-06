@@ -1,36 +1,10 @@
-import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Plus, Pencil, Trash2, Loader2 } from 'lucide-react'
+import { useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { ComboboxInput } from '@/components/ui/combobox-input'
-import type { ComboboxInputOption } from '@/components/ui/combobox-input'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+
+import { SectionPageLayout } from '@/components/layout'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,8 +15,48 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Plus, Pencil, Trash2, Loader2 } from 'lucide-react'
-import { SectionPageLayout } from '@/components/layout'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  ComboboxInput,
+  type ComboboxInputOption,
+} from '@/components/ui/combobox-input'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { getAdminPlans } from '@/features/subscriptions/api'
+import { getGroups, searchUsers } from '@/features/users/api'
+import { getUserModels } from '@/lib/api'
+import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
+import {
+  formatQuota,
+  parseQuotaFromDollars,
+  quotaUnitsToDollars,
+} from '@/lib/format'
+import { cn } from '@/lib/utils'
+
 import {
   getGroupRules,
   createGroupRule,
@@ -57,26 +71,18 @@ import {
   updateUserRule,
   deleteUserRule,
 } from './api'
+import {
+  formatTokensAsMillions,
+  parseMillionsToTokens,
+} from './lib/token-units'
 import type {
   ModelQuotaGroupRule,
   ModelQuotaPlanRule,
   ModelQuotaUserRule,
   MatchMode,
   ModelQuotaPeriod,
+  ModelQuotaScope,
 } from './types'
-import {
-  formatQuota,
-  parseQuotaFromDollars,
-  quotaUnitsToDollars,
-} from '@/lib/format'
-import {
-  getCurrencyDisplay,
-  getCurrencyLabel,
-} from '@/lib/currency'
-import { getUserModels } from '@/lib/api'
-import { getGroups, searchUsers } from '@/features/users/api'
-import { getAdminPlans } from '@/features/subscriptions/api'
-import { cn } from '@/lib/utils'
 
 type QuotaMode = 'add' | 'subtract' | 'override'
 
@@ -92,6 +98,46 @@ function getPeriodLabel(period?: ModelQuotaPeriod) {
     default:
       return '总额'
   }
+}
+
+function getRuleRangeLabel(
+  scope: ModelQuotaScope,
+  modelPattern: string,
+  t: (key: string) => string
+) {
+  return scope === 'all' ? t('全部模型') : modelPattern
+}
+
+function ScopeSelector({
+  value,
+  onChange,
+}: {
+  value: ModelQuotaScope
+  onChange: (value: ModelQuotaScope) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='space-y-2'>
+      <Label>{t('限制范围')}</Label>
+      <div className='inline-flex rounded-md border p-1'>
+        {(['all', 'model'] as const).map((scope) => (
+          <Button
+            key={scope}
+            type='button'
+            variant='ghost'
+            size='sm'
+            className={cn(
+              'min-w-24',
+              value === scope && 'bg-muted text-foreground'
+            )}
+            onClick={() => onChange(scope)}
+          >
+            {scope === 'all' ? t('全部模型') : t('指定模型')}
+          </Button>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -214,38 +260,39 @@ function GroupRulesTab() {
   const rules = data?.data?.items ?? []
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
+    <div className='space-y-4'>
+      <div className='flex justify-end'>
         <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4 mr-2" />
+          <Plus className='mr-2 size-4' />
           {t('添加规则')}
         </Button>
       </div>
-      <div className="rounded-md border">
+      <div className='rounded-md border'>
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>{t('分组名称')}</TableHead>
-              <TableHead>{t('模型匹配')}</TableHead>
+              <TableHead>{t('限制范围')}</TableHead>
               <TableHead>{t('匹配模式')}</TableHead>
               <TableHead>{t('限制周期')}</TableHead>
-              <TableHead>{t('额度上限')}</TableHead>
+              <TableHead>{t('金额上限')}</TableHead>
+              <TableHead>{t('Token 上限')}</TableHead>
               <TableHead>{t('状态')}</TableHead>
-              <TableHead className="text-right">{t('操作')}</TableHead>
+              <TableHead className='text-right'>{t('操作')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center">
-                  <Loader2 className="size-4 animate-spin mx-auto" />
+                <TableCell colSpan={8} className='text-center'>
+                  <Loader2 className='mx-auto size-4 animate-spin' />
                 </TableCell>
               </TableRow>
             ) : rules.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={7}
-                  className="text-center text-muted-foreground"
+                  colSpan={8}
+                  className='text-muted-foreground text-center'
                 >
                   {t('暂无规则配置')}
                 </TableCell>
@@ -253,11 +300,11 @@ function GroupRulesTab() {
             ) : (
               rules.map((rule) => (
                 <TableRow key={rule.id}>
-                  <TableCell className="font-medium">
+                  <TableCell className='font-medium'>
                     {rule.group_name}
                   </TableCell>
-                  <TableCell className="font-mono">
-                    {rule.model_pattern}
+                  <TableCell className='font-mono'>
+                    {getRuleRangeLabel(rule.scope, rule.model_pattern, t)}
                   </TableCell>
                   <TableCell>
                     <Badge
@@ -265,34 +312,45 @@ function GroupRulesTab() {
                         rule.match_mode === 'exact' ? 'default' : 'secondary'
                       }
                     >
-                      {rule.match_mode === 'exact'
-                        ? t('精确匹配')
-                        : t('前缀匹配')}
+                      {rule.scope === 'all'
+                        ? '—'
+                        : rule.match_mode === 'exact'
+                          ? t('精确匹配')
+                          : t('前缀匹配')}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline">{getPeriodLabel(rule.period)}</Badge>
+                    <Badge variant='outline'>
+                      {getPeriodLabel(rule.period)}
+                    </Badge>
                   </TableCell>
-                  <TableCell>{formatQuota(rule.quota_limit)}</TableCell>
+                  <TableCell>
+                    {rule.quota_limit > 0 ? formatQuota(rule.quota_limit) : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {rule.token_limit > 0
+                      ? `${formatTokensAsMillions(rule.token_limit)} M`
+                      : '—'}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={rule.enabled ? 'default' : 'outline'}>
                       {rule.enabled ? t('已启用') : t('已禁用')}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className='text-right'>
                     <Button
-                      variant="ghost"
-                      size="icon"
+                      variant='ghost'
+                      size='icon'
                       onClick={() => setEditingRule(rule)}
                     >
-                      <Pencil className="size-4" />
+                      <Pencil className='size-4' />
                     </Button>
                     <Button
-                      variant="ghost"
-                      size="icon"
+                      variant='ghost'
+                      size='icon'
                       onClick={() => setDeletingRule(rule)}
                     >
-                      <Trash2 className="size-4" />
+                      <Trash2 className='size-4' />
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -305,7 +363,7 @@ function GroupRulesTab() {
       {/* Create Dialog — key forces fresh state each open */}
       {createOpen && (
         <GroupRuleDialog
-          key="create"
+          key='create'
           open={createOpen}
           onOpenChange={setCreateOpen}
           onSubmit={(data) => createMutation.mutate(data)}
@@ -321,8 +379,7 @@ function GroupRulesTab() {
           onOpenChange={(open) => !open && setEditingRule(null)}
           rule={editingRule}
           onSubmit={(data) =>
-            editingRule &&
-            updateMutation.mutate({ id: editingRule.id, data })
+            editingRule && updateMutation.mutate({ id: editingRule.id, data })
           }
           isLoading={updateMutation.isPending}
         />
@@ -410,37 +467,38 @@ function PlanRulesTab() {
   const rules = data?.data?.items ?? []
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
+    <div className='space-y-4'>
+      <div className='flex justify-end'>
         <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4 mr-2" />
+          <Plus className='mr-2 size-4' />
           {t('添加规则')}
         </Button>
       </div>
-      <div className="rounded-md border">
+      <div className='rounded-md border'>
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>{t('订阅计划')}</TableHead>
-              <TableHead>{t('模型匹配')}</TableHead>
+              <TableHead>{t('限制范围')}</TableHead>
               <TableHead>{t('匹配模式')}</TableHead>
-              <TableHead>{t('额度上限')}</TableHead>
+              <TableHead>{t('金额上限')}</TableHead>
+              <TableHead>{t('Token 上限')}</TableHead>
               <TableHead>{t('状态')}</TableHead>
-              <TableHead className="text-right">{t('操作')}</TableHead>
+              <TableHead className='text-right'>{t('操作')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center">
-                  <Loader2 className="size-4 animate-spin mx-auto" />
+                <TableCell colSpan={7} className='text-center'>
+                  <Loader2 className='mx-auto size-4 animate-spin' />
                 </TableCell>
               </TableRow>
             ) : rules.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
-                  className="text-center text-muted-foreground"
+                  colSpan={7}
+                  className='text-muted-foreground text-center'
                 >
                   {t('暂无规则配置')}
                 </TableCell>
@@ -448,11 +506,11 @@ function PlanRulesTab() {
             ) : (
               rules.map((rule) => (
                 <TableRow key={rule.id}>
-                  <TableCell className="font-medium">
+                  <TableCell className='font-medium'>
                     {t('计划')} #{rule.plan_id}
                   </TableCell>
-                  <TableCell className="font-mono">
-                    {rule.model_pattern}
+                  <TableCell className='font-mono'>
+                    {getRuleRangeLabel(rule.scope, rule.model_pattern, t)}
                   </TableCell>
                   <TableCell>
                     <Badge
@@ -460,31 +518,40 @@ function PlanRulesTab() {
                         rule.match_mode === 'exact' ? 'default' : 'secondary'
                       }
                     >
-                      {rule.match_mode === 'exact'
-                        ? t('精确匹配')
-                        : t('前缀匹配')}
+                      {rule.scope === 'all'
+                        ? '—'
+                        : rule.match_mode === 'exact'
+                          ? t('精确匹配')
+                          : t('前缀匹配')}
                     </Badge>
                   </TableCell>
-                  <TableCell>{formatQuota(rule.quota_limit)}</TableCell>
+                  <TableCell>
+                    {rule.quota_limit > 0 ? formatQuota(rule.quota_limit) : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {rule.token_limit > 0
+                      ? `${formatTokensAsMillions(rule.token_limit)} M`
+                      : '—'}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={rule.enabled ? 'default' : 'outline'}>
                       {rule.enabled ? t('已启用') : t('已禁用')}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className='text-right'>
                     <Button
-                      variant="ghost"
-                      size="icon"
+                      variant='ghost'
+                      size='icon'
                       onClick={() => setEditingRule(rule)}
                     >
-                      <Pencil className="size-4" />
+                      <Pencil className='size-4' />
                     </Button>
                     <Button
-                      variant="ghost"
-                      size="icon"
+                      variant='ghost'
+                      size='icon'
                       onClick={() => setDeletingRule(rule)}
                     >
-                      <Trash2 className="size-4" />
+                      <Trash2 className='size-4' />
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -497,7 +564,7 @@ function PlanRulesTab() {
       {/* Create Dialog */}
       {createOpen && (
         <PlanRuleDialog
-          key="create"
+          key='create'
           open={createOpen}
           onOpenChange={setCreateOpen}
           onSubmit={(data) => createMutation.mutate(data)}
@@ -601,38 +668,39 @@ function UserRulesTab() {
   const rules = data?.data?.items ?? []
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
+    <div className='space-y-4'>
+      <div className='flex justify-end'>
         <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4 mr-2" />
+          <Plus className='mr-2 size-4' />
           {t('添加规则')}
         </Button>
       </div>
-      <div className="rounded-md border">
+      <div className='rounded-md border'>
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>{t('用户')}</TableHead>
-              <TableHead>{t('模型匹配')}</TableHead>
+              <TableHead>{t('限制范围')}</TableHead>
               <TableHead>{t('匹配模式')}</TableHead>
               <TableHead>{t('限制周期')}</TableHead>
-              <TableHead>{t('额度上限')}</TableHead>
+              <TableHead>{t('金额上限')}</TableHead>
+              <TableHead>{t('Token 上限')}</TableHead>
               <TableHead>{t('状态')}</TableHead>
-              <TableHead className="text-right">{t('操作')}</TableHead>
+              <TableHead className='text-right'>{t('操作')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center">
-                  <Loader2 className="size-4 animate-spin mx-auto" />
+                <TableCell colSpan={8} className='text-center'>
+                  <Loader2 className='mx-auto size-4 animate-spin' />
                 </TableCell>
               </TableRow>
             ) : rules.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={7}
-                  className="text-center text-muted-foreground"
+                  colSpan={8}
+                  className='text-muted-foreground text-center'
                 >
                   {t('暂无规则配置')}
                 </TableCell>
@@ -640,16 +708,16 @@ function UserRulesTab() {
             ) : (
               rules.map((rule) => (
                 <TableRow key={rule.id}>
-                  <TableCell className="font-medium">
-                    <div className="flex flex-col">
+                  <TableCell className='font-medium'>
+                    <div className='flex flex-col'>
                       <span>{rule.username || `#${rule.user_id}`}</span>
-                      <span className="text-xs text-muted-foreground">
+                      <span className='text-muted-foreground text-xs'>
                         ID: {rule.user_id}
                       </span>
                     </div>
                   </TableCell>
-                  <TableCell className="font-mono">
-                    {rule.model_pattern}
+                  <TableCell className='font-mono'>
+                    {getRuleRangeLabel(rule.scope, rule.model_pattern, t)}
                   </TableCell>
                   <TableCell>
                     <Badge
@@ -657,34 +725,45 @@ function UserRulesTab() {
                         rule.match_mode === 'exact' ? 'default' : 'secondary'
                       }
                     >
-                      {rule.match_mode === 'exact'
-                        ? t('精确匹配')
-                        : t('前缀匹配')}
+                      {rule.scope === 'all'
+                        ? '—'
+                        : rule.match_mode === 'exact'
+                          ? t('精确匹配')
+                          : t('前缀匹配')}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline">{getPeriodLabel(rule.period)}</Badge>
+                    <Badge variant='outline'>
+                      {getPeriodLabel(rule.period)}
+                    </Badge>
                   </TableCell>
-                  <TableCell>{formatQuota(rule.quota_limit)}</TableCell>
+                  <TableCell>
+                    {rule.quota_limit > 0 ? formatQuota(rule.quota_limit) : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {rule.token_limit > 0
+                      ? `${formatTokensAsMillions(rule.token_limit)} M`
+                      : '—'}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={rule.enabled ? 'default' : 'outline'}>
                       {rule.enabled ? t('已启用') : t('已禁用')}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className='text-right'>
                     <Button
-                      variant="ghost"
-                      size="icon"
+                      variant='ghost'
+                      size='icon'
                       onClick={() => setEditingRule(rule)}
                     >
-                      <Pencil className="size-4" />
+                      <Pencil className='size-4' />
                     </Button>
                     <Button
-                      variant="ghost"
-                      size="icon"
+                      variant='ghost'
+                      size='icon'
                       onClick={() => setDeletingRule(rule)}
                     >
-                      <Trash2 className="size-4" />
+                      <Trash2 className='size-4' />
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -697,7 +776,7 @@ function UserRulesTab() {
       {/* Create Dialog */}
       {createOpen && (
         <UserRuleDialog
-          key="create"
+          key='create'
           open={createOpen}
           onOpenChange={setCreateOpen}
           onSubmit={(data) => createMutation.mutate(data)}
@@ -769,6 +848,7 @@ function GroupRuleDialog({
   const modelOptions = useModelOptions()
   const isEdit = !!rule
   const [groupName, setGroupName] = useState(rule?.group_name ?? 'default')
+  const [scope, setScope] = useState<ModelQuotaScope>(rule?.scope ?? 'model')
   const [modelPattern, setModelPattern] = useState(rule?.model_pattern ?? '')
   const [matchMode, setMatchMode] = useState<MatchMode>(
     rule?.match_mode ?? 'exact'
@@ -780,6 +860,9 @@ function GroupRuleDialog({
   const [quotaAmount, setQuotaAmount] = useState(
     isEdit ? String(quotaUnitsToDollars(rule!.quota_limit)) : ''
   )
+  const [tokenAmount, setTokenAmount] = useState(
+    rule?.token_limit ? formatTokensAsMillions(rule.token_limit) : ''
+  )
   const [enabled] = useState(rule?.enabled ?? true)
 
   const { meta: currencyMeta } = getCurrencyDisplay()
@@ -789,6 +872,7 @@ function GroupRuleDialog({
   const currentQuota = rule?.quota_limit ?? 0
   const amountValue = parseFloat(quotaAmount) || 0
   const inputQuota = parseQuotaFromDollars(Math.abs(amountValue))
+  const parsedTokenLimit = tokenAmount ? parseMillionsToTokens(tokenAmount) : 0
 
   const getPreviewText = () => {
     if (!isEdit) {
@@ -825,10 +909,12 @@ function GroupRuleDialog({
     }
     onSubmit({
       group_name: groupName,
-      model_pattern: modelPattern,
-      match_mode: matchMode,
+      scope,
+      model_pattern: scope === 'all' ? '' : modelPattern,
+      match_mode: scope === 'all' ? 'exact' : matchMode,
       period,
       quota_limit: finalQuota,
+      token_limit: scope === 'all' ? (parsedTokenLimit ?? 0) : 0,
       enabled,
       sort_order: rule?.sort_order ?? 0,
     })
@@ -847,8 +933,8 @@ function GroupRuleDialog({
             {t('为此分组配置指定模型的额度限制。')}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
+        <div className='space-y-4 py-4'>
+          <div className='space-y-2'>
             <Label>{t('分组名称')}</Label>
             <ComboboxInput
               options={groupOptions}
@@ -859,33 +945,38 @@ function GroupRuleDialog({
               allowCustomValue
             />
           </div>
-          <div className="space-y-2">
-            <Label>{t('模型名称')}</Label>
-            <ComboboxInput
-              options={modelOptions}
-              value={modelPattern}
-              onValueChange={setModelPattern}
-              placeholder={t('选择或输入模型名称...')}
-              emptyText={t('未找到匹配的模型')}
-              allowCustomValue
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>{t('匹配模式')}</Label>
-            <Select
-              value={matchMode}
-              onValueChange={(v) => setMatchMode(v as MatchMode)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="exact">{t('精确匹配')}</SelectItem>
-                <SelectItem value="prefix">{t('前缀匹配')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
+          <ScopeSelector value={scope} onChange={setScope} />
+          {scope === 'model' && (
+            <>
+              <div className='space-y-2'>
+                <Label>{t('模型名称')}</Label>
+                <ComboboxInput
+                  options={modelOptions}
+                  value={modelPattern}
+                  onValueChange={setModelPattern}
+                  placeholder={t('选择或输入模型名称...')}
+                  emptyText={t('未找到匹配的模型')}
+                  allowCustomValue
+                />
+              </div>
+              <div className='space-y-2'>
+                <Label>{t('匹配模式')}</Label>
+                <Select
+                  value={matchMode}
+                  onValueChange={(v) => setMatchMode(v as MatchMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value='exact'>{t('精确匹配')}</SelectItem>
+                    <SelectItem value='prefix'>{t('前缀匹配')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+          <div className='space-y-2'>
             <Label>{t('限制周期')}</Label>
             <Select
               value={period}
@@ -895,27 +986,27 @@ function GroupRuleDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="total">{t('总额限制')}</SelectItem>
-                <SelectItem value="daily">{t('每日限制')}</SelectItem>
-                <SelectItem value="weekly">{t('每周限制')}</SelectItem>
-                <SelectItem value="monthly">{t('每月限制')}</SelectItem>
+                <SelectItem value='total'>{t('总额限制')}</SelectItem>
+                <SelectItem value='daily'>{t('每日限制')}</SelectItem>
+                <SelectItem value='weekly'>{t('每周限制')}</SelectItem>
+                <SelectItem value='monthly'>{t('每月限制')}</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
+            <p className='text-muted-foreground text-xs'>
               {t('周期到期后会自动为用户重置该模型额度。')}
             </p>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>{t('额度上限')}</Label>
+          <div className='space-y-2'>
+            <div className='flex items-center justify-between'>
+              <Label>{t('金额上限')}</Label>
               {isEdit && (
-                <div className="flex gap-1">
+                <div className='flex gap-1'>
                   {(['add', 'subtract', 'override'] as const).map((m) => (
                     <Button
                       key={m}
-                      type="button"
-                      variant="outline"
-                      size="sm"
+                      type='button'
+                      variant='outline'
+                      size='sm'
                       className={cn(
                         quotaMode === m &&
                           'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
@@ -935,9 +1026,11 @@ function GroupRuleDialog({
                 </div>
               )}
             </div>
-            <div className="text-muted-foreground text-sm">{getPreviewText()}</div>
+            <div className='text-muted-foreground text-sm'>
+              {getPreviewText()}
+            </div>
             <Input
-              type="number"
+              type='number'
               step={tokensOnly ? 1 : 0.01}
               min={quotaMode === 'override' ? undefined : 0}
               placeholder={placeholder}
@@ -945,13 +1038,39 @@ function GroupRuleDialog({
               onChange={(e) => setQuotaAmount(e.target.value)}
             />
           </div>
+          {scope === 'all' && (
+            <div className='space-y-2'>
+              <Label>{t('Token 上限（M）')}</Label>
+              <Input
+                inputMode='decimal'
+                placeholder={t('例如：100 表示 100M Token')}
+                value={tokenAmount}
+                onChange={(e) => setTokenAmount(e.target.value)}
+              />
+              {tokenAmount && parsedTokenLimit === null && (
+                <p className='text-destructive text-xs'>
+                  {t('请输入非负数，最多保留三位小数。')}
+                </p>
+              )}
+            </div>
+          )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('取消')}
           </Button>
-          <Button onClick={handleSubmit} disabled={isLoading}>
-            {isLoading && <Loader2 className="size-4 mr-2 animate-spin" />}
+          <Button
+            onClick={handleSubmit}
+            disabled={
+              isLoading ||
+              !groupName ||
+              parsedTokenLimit === null ||
+              (scope === 'model'
+                ? !modelPattern || inputQuota <= 0
+                : inputQuota <= 0 && parsedTokenLimit <= 0)
+            }
+          >
+            {isLoading && <Loader2 className='mr-2 size-4 animate-spin' />}
             {rule ? t('保存') : t('创建')}
           </Button>
         </DialogFooter>
@@ -982,6 +1101,7 @@ function PlanRuleDialog({
   const planOptions = usePlanOptions()
   const isEdit = !!rule
   const [planId, setPlanId] = useState(String(rule?.plan_id ?? ''))
+  const [scope, setScope] = useState<ModelQuotaScope>(rule?.scope ?? 'model')
   const [modelPattern, setModelPattern] = useState(rule?.model_pattern ?? '')
   const [matchMode, setMatchMode] = useState<MatchMode>(
     rule?.match_mode ?? 'exact'
@@ -989,6 +1109,9 @@ function PlanRuleDialog({
   const [quotaMode, setQuotaMode] = useState<QuotaMode>('override')
   const [quotaAmount, setQuotaAmount] = useState(
     isEdit ? String(quotaUnitsToDollars(rule!.quota_limit)) : ''
+  )
+  const [tokenAmount, setTokenAmount] = useState(
+    rule?.token_limit ? formatTokensAsMillions(rule.token_limit) : ''
   )
   const [enabled] = useState(rule?.enabled ?? true)
 
@@ -999,6 +1122,7 @@ function PlanRuleDialog({
   const currentQuota = rule?.quota_limit ?? 0
   const amountValue = parseFloat(quotaAmount) || 0
   const inputQuota = parseQuotaFromDollars(Math.abs(amountValue))
+  const parsedTokenLimit = tokenAmount ? parseMillionsToTokens(tokenAmount) : 0
 
   const getPreviewText = () => {
     if (!isEdit) {
@@ -1035,9 +1159,11 @@ function PlanRuleDialog({
     }
     onSubmit({
       plan_id: parseInt(planId, 10),
-      model_pattern: modelPattern,
-      match_mode: matchMode,
+      scope,
+      model_pattern: scope === 'all' ? '' : modelPattern,
+      match_mode: scope === 'all' ? 'exact' : matchMode,
       quota_limit: finalQuota,
+      token_limit: scope === 'all' ? (parsedTokenLimit ?? 0) : 0,
       enabled,
       sort_order: rule?.sort_order ?? 0,
     })
@@ -1056,8 +1182,8 @@ function PlanRuleDialog({
             {t('为此订阅计划配置指定模型的额度限制。')}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
+        <div className='space-y-4 py-4'>
+          <div className='space-y-2'>
             <Label>{t('订阅计划')}</Label>
             <Select value={planId} onValueChange={(v) => setPlanId(v ?? '')}>
               <SelectTrigger>
@@ -1072,43 +1198,48 @@ function PlanRuleDialog({
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
-            <Label>{t('模型名称')}</Label>
-            <ComboboxInput
-              options={modelOptions}
-              value={modelPattern}
-              onValueChange={setModelPattern}
-              placeholder={t('选择或输入模型名称...')}
-              emptyText={t('未找到匹配的模型')}
-              allowCustomValue
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>{t('匹配模式')}</Label>
-            <Select
-              value={matchMode}
-              onValueChange={(v) => setMatchMode(v as MatchMode)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="exact">{t('精确匹配')}</SelectItem>
-                <SelectItem value="prefix">{t('前缀匹配')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>{t('额度上限')}</Label>
+          <ScopeSelector value={scope} onChange={setScope} />
+          {scope === 'model' && (
+            <>
+              <div className='space-y-2'>
+                <Label>{t('模型名称')}</Label>
+                <ComboboxInput
+                  options={modelOptions}
+                  value={modelPattern}
+                  onValueChange={setModelPattern}
+                  placeholder={t('选择或输入模型名称...')}
+                  emptyText={t('未找到匹配的模型')}
+                  allowCustomValue
+                />
+              </div>
+              <div className='space-y-2'>
+                <Label>{t('匹配模式')}</Label>
+                <Select
+                  value={matchMode}
+                  onValueChange={(v) => setMatchMode(v as MatchMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value='exact'>{t('精确匹配')}</SelectItem>
+                    <SelectItem value='prefix'>{t('前缀匹配')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+          <div className='space-y-2'>
+            <div className='flex items-center justify-between'>
+              <Label>{t('金额上限')}</Label>
               {isEdit && (
-                <div className="flex gap-1">
+                <div className='flex gap-1'>
                   {(['add', 'subtract', 'override'] as const).map((m) => (
                     <Button
                       key={m}
-                      type="button"
-                      variant="outline"
-                      size="sm"
+                      type='button'
+                      variant='outline'
+                      size='sm'
                       className={cn(
                         quotaMode === m &&
                           'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
@@ -1128,9 +1259,11 @@ function PlanRuleDialog({
                 </div>
               )}
             </div>
-            <div className="text-muted-foreground text-sm">{getPreviewText()}</div>
+            <div className='text-muted-foreground text-sm'>
+              {getPreviewText()}
+            </div>
             <Input
-              type="number"
+              type='number'
               step={tokensOnly ? 1 : 0.01}
               min={quotaMode === 'override' ? undefined : 0}
               placeholder={placeholder}
@@ -1138,13 +1271,39 @@ function PlanRuleDialog({
               onChange={(e) => setQuotaAmount(e.target.value)}
             />
           </div>
+          {scope === 'all' && (
+            <div className='space-y-2'>
+              <Label>{t('Token 上限（M）')}</Label>
+              <Input
+                inputMode='decimal'
+                placeholder={t('例如：100 表示 100M Token')}
+                value={tokenAmount}
+                onChange={(e) => setTokenAmount(e.target.value)}
+              />
+              {tokenAmount && parsedTokenLimit === null && (
+                <p className='text-destructive text-xs'>
+                  {t('请输入非负数，最多保留三位小数。')}
+                </p>
+              )}
+            </div>
+          )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('取消')}
           </Button>
-          <Button onClick={handleSubmit} disabled={isLoading}>
-            {isLoading && <Loader2 className="size-4 mr-2 animate-spin" />}
+          <Button
+            onClick={handleSubmit}
+            disabled={
+              isLoading ||
+              !planId ||
+              parsedTokenLimit === null ||
+              (scope === 'model'
+                ? !modelPattern || inputQuota <= 0
+                : inputQuota <= 0 && parsedTokenLimit <= 0)
+            }
+          >
+            {isLoading && <Loader2 className='mr-2 size-4 animate-spin' />}
             {rule ? t('保存') : t('创建')}
           </Button>
         </DialogFooter>
@@ -1175,6 +1334,7 @@ function UserRuleDialog({
   const modelOptions = useModelOptions()
   const isEdit = !!rule
   const [userId, setUserId] = useState(rule ? String(rule.user_id) : '')
+  const [scope, setScope] = useState<ModelQuotaScope>(rule?.scope ?? 'model')
   const [modelPattern, setModelPattern] = useState(rule?.model_pattern ?? '')
   const [matchMode, setMatchMode] = useState<MatchMode>(
     rule?.match_mode ?? 'exact'
@@ -1186,6 +1346,9 @@ function UserRuleDialog({
   const [quotaAmount, setQuotaAmount] = useState(
     isEdit ? String(quotaUnitsToDollars(rule!.quota_limit)) : ''
   )
+  const [tokenAmount, setTokenAmount] = useState(
+    rule?.token_limit ? formatTokensAsMillions(rule.token_limit) : ''
+  )
   const [enabled, setEnabled] = useState(rule?.enabled ?? true)
 
   const { meta: currencyMeta } = getCurrencyDisplay()
@@ -1195,6 +1358,7 @@ function UserRuleDialog({
   const currentQuota = rule?.quota_limit ?? 0
   const amountValue = parseFloat(quotaAmount) || 0
   const inputQuota = parseQuotaFromDollars(Math.abs(amountValue))
+  const parsedTokenLimit = tokenAmount ? parseMillionsToTokens(tokenAmount) : 0
 
   const getPreviewText = () => {
     if (!isEdit) {
@@ -1231,10 +1395,12 @@ function UserRuleDialog({
     }
     onSubmit({
       user_id: parseInt(userId, 10),
-      model_pattern: modelPattern,
-      match_mode: matchMode,
+      scope,
+      model_pattern: scope === 'all' ? '' : modelPattern,
+      match_mode: scope === 'all' ? 'exact' : matchMode,
       period,
       quota_limit: finalQuota,
+      token_limit: scope === 'all' ? (parsedTokenLimit ?? 0) : 0,
       enabled,
       sort_order: rule?.sort_order ?? 0,
     })
@@ -1253,8 +1419,8 @@ function UserRuleDialog({
             {t('为此用户单独配置指定模型的额度限制。')}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
+        <div className='space-y-4 py-4'>
+          <div className='space-y-2'>
             <Label>{t('用户')}</Label>
             <ComboboxInput
               options={userOptions}
@@ -1263,37 +1429,42 @@ function UserRuleDialog({
               placeholder={t('搜索并选择用户...')}
               emptyText={t('未找到匹配的用户')}
             />
-            <p className="text-xs text-muted-foreground">
+            <p className='text-muted-foreground text-xs'>
               {t('可通过用户名或显示名搜索，用户优先级高于分组和套餐规则。')}
             </p>
           </div>
-          <div className="space-y-2">
-            <Label>{t('模型名称')}</Label>
-            <ComboboxInput
-              options={modelOptions}
-              value={modelPattern}
-              onValueChange={setModelPattern}
-              placeholder={t('选择或输入模型名称...')}
-              emptyText={t('未找到匹配的模型')}
-              allowCustomValue
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>{t('匹配模式')}</Label>
-            <Select
-              value={matchMode}
-              onValueChange={(v) => setMatchMode(v as MatchMode)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="exact">{t('精确匹配')}</SelectItem>
-                <SelectItem value="prefix">{t('前缀匹配')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
+          <ScopeSelector value={scope} onChange={setScope} />
+          {scope === 'model' && (
+            <>
+              <div className='space-y-2'>
+                <Label>{t('模型名称')}</Label>
+                <ComboboxInput
+                  options={modelOptions}
+                  value={modelPattern}
+                  onValueChange={setModelPattern}
+                  placeholder={t('选择或输入模型名称...')}
+                  emptyText={t('未找到匹配的模型')}
+                  allowCustomValue
+                />
+              </div>
+              <div className='space-y-2'>
+                <Label>{t('匹配模式')}</Label>
+                <Select
+                  value={matchMode}
+                  onValueChange={(v) => setMatchMode(v as MatchMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value='exact'>{t('精确匹配')}</SelectItem>
+                    <SelectItem value='prefix'>{t('前缀匹配')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+          <div className='space-y-2'>
             <Label>{t('限制周期')}</Label>
             <Select
               value={period}
@@ -1303,27 +1474,27 @@ function UserRuleDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="daily">{t('每日限制')}</SelectItem>
-                <SelectItem value="weekly">{t('每周限制')}</SelectItem>
-                <SelectItem value="monthly">{t('每月限制')}</SelectItem>
-                <SelectItem value="total">{t('总额限制')}</SelectItem>
+                <SelectItem value='daily'>{t('每日限制')}</SelectItem>
+                <SelectItem value='weekly'>{t('每周限制')}</SelectItem>
+                <SelectItem value='monthly'>{t('每月限制')}</SelectItem>
+                <SelectItem value='total'>{t('总额限制')}</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
+            <p className='text-muted-foreground text-xs'>
               {t('周期到期后会自动为该用户重置此模型额度。')}
             </p>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>{t('额度上限')}</Label>
+          <div className='space-y-2'>
+            <div className='flex items-center justify-between'>
+              <Label>{t('金额上限')}</Label>
               {isEdit && (
-                <div className="flex gap-1">
+                <div className='flex gap-1'>
                   {(['add', 'subtract', 'override'] as const).map((m) => (
                     <Button
                       key={m}
-                      type="button"
-                      variant="outline"
-                      size="sm"
+                      type='button'
+                      variant='outline'
+                      size='sm'
                       className={cn(
                         quotaMode === m &&
                           'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
@@ -1343,9 +1514,11 @@ function UserRuleDialog({
                 </div>
               )}
             </div>
-            <div className="text-muted-foreground text-sm">{getPreviewText()}</div>
+            <div className='text-muted-foreground text-sm'>
+              {getPreviewText()}
+            </div>
             <Input
-              type="number"
+              type='number'
               step={tokensOnly ? 1 : 0.01}
               min={quotaMode === 'override' ? undefined : 0}
               placeholder={placeholder}
@@ -1353,26 +1526,49 @@ function UserRuleDialog({
               onChange={(e) => setQuotaAmount(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-2">
-            <Label htmlFor="user-rule-enabled">{t('启用')}</Label>
+          {scope === 'all' && (
+            <div className='space-y-2'>
+              <Label>{t('Token 上限（M）')}</Label>
+              <Input
+                inputMode='decimal'
+                placeholder={t('例如：100 表示 100M Token')}
+                value={tokenAmount}
+                onChange={(e) => setTokenAmount(e.target.value)}
+              />
+              {tokenAmount && parsedTokenLimit === null && (
+                <p className='text-destructive text-xs'>
+                  {t('请输入非负数，最多保留三位小数。')}
+                </p>
+              )}
+            </div>
+          )}
+          <div className='flex items-center gap-2'>
+            <Label htmlFor='user-rule-enabled'>{t('启用')}</Label>
             <input
-              id="user-rule-enabled"
-              type="checkbox"
+              id='user-rule-enabled'
+              type='checkbox'
               checked={enabled}
               onChange={(e) => setEnabled(e.target.checked)}
-              className="size-4"
+              className='size-4'
             />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('取消')}
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={isLoading || !userId || !modelPattern}
+            disabled={
+              isLoading ||
+              !userId ||
+              parsedTokenLimit === null ||
+              (scope === 'model'
+                ? !modelPattern || inputQuota <= 0
+                : inputQuota <= 0 && parsedTokenLimit <= 0)
+            }
           >
-            {isLoading && <Loader2 className="size-4 mr-2 animate-spin" />}
+            {isLoading && <Loader2 className='mr-2 size-4 animate-spin' />}
             {rule ? t('保存') : t('创建')}
           </Button>
         </DialogFooter>
@@ -1387,21 +1583,19 @@ function UserRuleDialog({
 
 export function ModelQuotaRulesPage() {
   const { t } = useTranslation()
-  const [activeTab, setActiveTab] = useState<'group' | 'plan' | 'user'>(
-    'group'
-  )
+  const [activeTab, setActiveTab] = useState<'group' | 'plan' | 'user'>('group')
 
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>{t('模型额度规则')}</SectionPageLayout.Title>
+      <SectionPageLayout.Title>{t('用量限制规则')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <div className="space-y-4">
+        <div className='space-y-4'>
           {/* Tab switcher */}
-          <div className="flex gap-2 border-b">
+          <div className='flex gap-2 border-b'>
             <button
               className={`px-4 py-2 text-sm font-medium transition-colors ${
                 activeTab === 'group'
-                  ? 'border-b-2 border-primary text-primary'
+                  ? 'border-primary text-primary border-b-2'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
               onClick={() => setActiveTab('group')}
@@ -1411,7 +1605,7 @@ export function ModelQuotaRulesPage() {
             <button
               className={`px-4 py-2 text-sm font-medium transition-colors ${
                 activeTab === 'plan'
-                  ? 'border-b-2 border-primary text-primary'
+                  ? 'border-primary text-primary border-b-2'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
               onClick={() => setActiveTab('plan')}
@@ -1421,7 +1615,7 @@ export function ModelQuotaRulesPage() {
             <button
               className={`px-4 py-2 text-sm font-medium transition-colors ${
                 activeTab === 'user'
-                  ? 'border-b-2 border-primary text-primary'
+                  ? 'border-primary text-primary border-b-2'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
               onClick={() => setActiveTab('user')}
