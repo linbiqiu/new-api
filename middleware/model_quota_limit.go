@@ -1,8 +1,12 @@
 package middleware
 
 import (
+	"errors"
+	"net/http"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -40,23 +44,38 @@ func ModelQuotaLimit() gin.HandlerFunc {
 		// Estimate pre-consume quota (conservative: use model price if available)
 		preQuota := estimateModelQuota(modelName)
 
-		// Check model quota (service layer queries subscription info and calculates periods)
-		result, err := service.CheckModelQuota(userId, modelName, userGroup, preQuota)
+		result, err := service.CheckPreFundingModelQuota(userId, modelName, userGroup, preQuota)
 		if err != nil {
-			// On error, fail-open for availability
 			common.SysError("model quota check error: " + err.Error())
-			c.Next()
+			apiError := types.NewErrorWithStatusCode(
+				errors.New("用量校验暂时不可用，请稍后重试。"),
+				types.ErrorCodeUsageLimitCheckUnavailable,
+				http.StatusServiceUnavailable,
+			)
+			c.JSON(apiError.StatusCode, gin.H{"error": apiError.ToOpenAIError()})
+			c.Abort()
 			return
 		}
 
 		if !result.Passed {
-			abortWithOpenAiMessage(c, 403, result.ErrorMessage)
+			if result.APIError == nil {
+				apiError := types.NewErrorWithStatusCode(
+					errors.New("用量校验暂时不可用，请稍后重试。"),
+					types.ErrorCodeUsageLimitCheckUnavailable,
+					http.StatusServiceUnavailable,
+				)
+				c.JSON(apiError.StatusCode, gin.H{"error": apiError.ToOpenAIError()})
+				c.Abort()
+				return
+			}
+			c.JSON(result.APIError.StatusCode, gin.H{"error": result.APIError.ToOpenAIError()})
+			c.Abort()
 			return
 		}
 
 		// Store usage IDs for post-request recording
-		if len(result.UsageIds) > 0 {
-			c.Set(ModelQuotaLimitKey, result.UsageIds)
+		if len(result.UsageIDs) > 0 {
+			c.Set(ModelQuotaLimitKey, result.UsageIDs)
 		}
 
 		c.Next()

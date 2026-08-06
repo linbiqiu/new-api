@@ -71,3 +71,14 @@ func TestModelQuotaCacheDisabledIsAvailable(t *testing.T) {
 	require.NoError(t, CacheSetModelQuotaUsage(9, ModelQuotaUsageSnapshot{}, time.Now().Add(time.Hour).Unix()))
 	require.NoError(t, CacheIncrModelQuotaUsage(9, 1, 1))
 }
+
+func TestModelQuotaCacheTreatsLegacyAmountOnlyHashAsMiss(t *testing.T) {
+	useModelQuotaCacheMiniRedis(t)
+	key := modelQuotaUsageCacheKey(10)
+	require.NoError(t, common.RDB.HSet(t.Context(), key, "QuotaUsed", 12, "QuotaLimit", 100, "PeriodEnd", time.Now().Add(time.Hour).Unix()).Err())
+
+	got, ok, err := CacheGetModelQuotaUsage(10)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Zero(t, got)
+}

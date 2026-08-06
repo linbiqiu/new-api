@@ -58,6 +58,11 @@ func CacheGetModelQuotaUsage(usageId int) (ModelQuotaUsageSnapshot, bool, error)
 	if len(fields) == 0 {
 		return ModelQuotaUsageSnapshot{}, false, nil
 	}
+	for _, requiredField := range []string{"QuotaUsed", "QuotaLimit", "TokenUsed", "TokenLimit"} {
+		if _, exists := fields[requiredField]; !exists {
+			return ModelQuotaUsageSnapshot{}, false, nil
+		}
+	}
 
 	var snapshot ModelQuotaUsageSnapshot
 	values := map[string]*int64{
