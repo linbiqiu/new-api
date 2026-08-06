@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,16 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
+
+var (
+	ErrFeishuAppUnavailable       = errors.New("feishu app unavailable")
+	ErrFeishuRecipientUnavailable = errors.New("feishu recipient unavailable")
+)
+
+type notifySenderSet struct {
+	email  func(string, dto.Notify) error
+	feishu func(int, dto.Notify) error
+}
 
 func NotifyRootUser(t string, subject string, content string) {
 	user := model.GetRootUser().ToBaseUser()
@@ -52,32 +63,26 @@ func NotifyUpstreamModelUpdateWatchers(subject string, content string) {
 
 func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
 	notifyType := userSetting.NotifyType
-	if notifyType == "" {
-		notifyType = dto.NotifyTypeEmail
-	}
 
 	// Check notification limit
-	canSend, err := CheckNotificationLimit(userId, data.Type)
-	if err != nil {
-		common.SysLog(fmt.Sprintf("failed to check notification limit: %s", err.Error()))
-		return err
+	if data.Type != dto.NotifyTypeDailyTokenMilestone && data.Type != dto.NotifyTypeSubscriptionUsage80 {
+		canSend, err := CheckNotificationLimit(userId, data.Type)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to check notification limit: %s", err.Error()))
+			return err
+		}
+		if !canSend {
+			return fmt.Errorf("notification limit exceeded for user %d with type %s", userId, notifyType)
+		}
 	}
-	if !canSend {
-		return fmt.Errorf("notification limit exceeded for user %d with type %s", userId, notifyType)
+
+	if notifyType == "" || notifyType == dto.NotifyTypeEmail || notifyType == dto.NotifyTypeFeishuApp {
+		return notifyUserWithSenders(userId, userEmail, userSetting, data, notifySenderSet{
+			email: sendEmailNotify, feishu: sendFeishuAppNotify,
+		})
 	}
 
 	switch notifyType {
-	case dto.NotifyTypeEmail:
-		// 优先使用设置中的通知邮箱，如果为空则使用用户的默认邮箱
-		emailToUse := userSetting.NotificationEmail
-		if emailToUse == "" {
-			emailToUse = userEmail
-		}
-		if emailToUse == "" {
-			common.SysLog(fmt.Sprintf("user %d has no email, skip sending email", userId))
-			return nil
-		}
-		return sendEmailNotify(emailToUse, data)
 	case dto.NotifyTypeWebhook:
 		webhookURLStr := userSetting.WebhookUrl
 		if webhookURLStr == "" {
@@ -103,10 +108,36 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 			return nil
 		}
 		return sendGotifyNotify(gotifyUrl, gotifyToken, userSetting.GotifyPriority, data)
-	case dto.NotifyTypeFeishuApp:
-		return sendFeishuAppNotify(userId, data)
 	}
 	return nil
+}
+
+func notifyUserWithSenders(userID int, userEmail string, userSetting dto.UserSetting, data dto.Notify, senders notifySenderSet) error {
+	email := strings.TrimSpace(userSetting.NotificationEmail)
+	if email == "" {
+		email = strings.TrimSpace(userEmail)
+	}
+	sendEmail := func() error {
+		if email == "" {
+			return fmt.Errorf("user %d has no notification email", userID)
+		}
+		return senders.email(email, data)
+	}
+
+	switch userSetting.NotifyType {
+	case dto.NotifyTypeEmail:
+		return sendEmail()
+	case dto.NotifyTypeFeishuApp:
+		return senders.feishu(userID, data)
+	case "":
+		err := senders.feishu(userID, data)
+		if errors.Is(err, ErrFeishuAppUnavailable) || errors.Is(err, ErrFeishuRecipientUnavailable) {
+			return sendEmail()
+		}
+		return err
+	default:
+		return fmt.Errorf("unsupported notification channel: %s", userSetting.NotifyType)
+	}
 }
 
 func replaceNotifyValues(data dto.Notify) string {
@@ -303,7 +334,7 @@ type feishuMessageResp struct {
 func sendFeishuAppNotify(userId int, data dto.Notify) error {
 	settings := system_setting.GetFeishuSettings()
 	if settings.AppID == "" || settings.AppSecret == "" {
-		return fmt.Errorf("feishu app id/app secret is empty")
+		return ErrFeishuAppUnavailable
 	}
 
 	user, err := model.GetUserById(userId, true)
@@ -312,8 +343,7 @@ func sendFeishuAppNotify(userId int, data dto.Notify) error {
 	}
 	openID := strings.TrimSpace(user.FeishuId)
 	if openID == "" {
-		common.SysLog(fmt.Sprintf("user %d has no feishu open_id, skip feishu app notify", userId))
-		return nil
+		return ErrFeishuRecipientUnavailable
 	}
 
 	tenantToken, err := getFeishuTenantAccessToken(settings.AppID, settings.AppSecret)
@@ -321,8 +351,19 @@ func sendFeishuAppNotify(userId int, data dto.Notify) error {
 		return err
 	}
 
+	if data.FeishuCard != nil {
+		content, err := common.Marshal(data.FeishuCard)
+		if err != nil {
+			return err
+		}
+		return sendFeishuMessage(tenantToken, openID, "interactive", string(content))
+	}
 	text := fmt.Sprintf("%s\n\n%s", data.Title, sanitizeToPlainText(replaceNotifyValues(data)))
-	return sendFeishuTextMessage(tenantToken, openID, text)
+	content, err := common.Marshal(map[string]string{"text": text})
+	if err != nil {
+		return err
+	}
+	return sendFeishuMessage(tenantToken, openID, "text", string(content))
 }
 
 func getFeishuTenantAccessToken(appID, appSecret string) (string, error) {
@@ -363,10 +404,14 @@ func sendFeishuTextMessage(tenantToken, openID, text string) error {
 	if err != nil {
 		return err
 	}
+	return sendFeishuMessage(tenantToken, openID, "text", string(contentBytes))
+}
+
+func sendFeishuMessage(tenantToken, openID, msgType, content string) error {
 	reqBody, err := common.Marshal(map[string]string{
 		"receive_id": openID,
-		"msg_type":   "text",
-		"content":    string(contentBytes),
+		"msg_type":   msgType,
+		"content":    content,
 	})
 	if err != nil {
 		return err

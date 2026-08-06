@@ -93,7 +93,7 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 			RecordUsageGovernanceCounterError()
 			logger.LogError(ctx, "record usage limit counters failed: "+err.Error())
 		}
-		if err := recordSettledDailyUsage(relayInfo.UserId, int64(actualQuota), actualTokens, time.Now(), true); err != nil {
+		if err := recordSettledDailyUsage(relayInfo.UserId, int64(actualQuota), actualTokens, time.Now(), relayInfo.UserSetting.DailyTokenMilestoneNotifyEnabled()); err != nil {
 			logger.LogError(ctx, "record daily usage reminder counter failed: "+err.Error())
 		}
 		return nil
@@ -112,7 +112,7 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		RecordUsageGovernanceCounterError()
 		logger.LogError(ctx, "record usage limit counters failed: "+err.Error())
 	}
-	if err := recordSettledDailyUsage(relayInfo.UserId, int64(actualQuota), actualTokens, time.Now(), true); err != nil {
+	if err := recordSettledDailyUsage(relayInfo.UserId, int64(actualQuota), actualTokens, time.Now(), relayInfo.UserSetting.DailyTokenMilestoneNotifyEnabled()); err != nil {
 		logger.LogError(ctx, "record daily usage reminder counter failed: "+err.Error())
 	}
 	return nil
