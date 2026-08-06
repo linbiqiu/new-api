@@ -83,8 +83,22 @@ const (
 	ErrorCodeUpdateDataError ErrorCode = "update_data_error"
 
 	// quota error
-	ErrorCodeInsufficientUserQuota      ErrorCode = "insufficient_user_quota"
-	ErrorCodePreConsumeTokenQuotaFailed ErrorCode = "pre_consume_token_quota_failed"
+	ErrorCodeInsufficientUserQuota            ErrorCode = "insufficient_user_quota"
+	ErrorCodePreConsumeTokenQuotaFailed       ErrorCode = "pre_consume_token_quota_failed"
+	ErrorCodeWalletQuotaExhausted             ErrorCode = "wallet_quota_exhausted"
+	ErrorCodeWalletQuotaInsufficient          ErrorCode = "wallet_quota_insufficient"
+	ErrorCodeSubscriptionUnavailable          ErrorCode = "subscription_unavailable"
+	ErrorCodeSubscriptionExpired              ErrorCode = "subscription_expired"
+	ErrorCodeSubscriptionPeriodExhausted      ErrorCode = "subscription_period_quota_exhausted"
+	ErrorCodeSubscriptionPeriodInsufficient   ErrorCode = "subscription_period_quota_insufficient"
+	ErrorCodeAPITokenQuotaExhausted           ErrorCode = "api_token_quota_exhausted"
+	ErrorCodeAPITokenQuotaInsufficient        ErrorCode = "api_token_quota_insufficient"
+	ErrorCodeAllModelsAmountLimitExhausted    ErrorCode = "all_models_amount_limit_exhausted"
+	ErrorCodeAllModelsAmountLimitInsufficient ErrorCode = "all_models_amount_limit_insufficient"
+	ErrorCodeAllModelsTokenLimitExhausted     ErrorCode = "all_models_token_limit_exhausted"
+	ErrorCodeModelAmountLimitExhausted        ErrorCode = "model_amount_limit_exhausted"
+	ErrorCodeModelAmountLimitInsufficient     ErrorCode = "model_amount_limit_insufficient"
+	ErrorCodeUsageLimitCheckUnavailable       ErrorCode = "usage_limit_check_unavailable"
 )
 
 type NewAPIError struct {
