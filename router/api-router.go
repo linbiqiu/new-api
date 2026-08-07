@@ -261,6 +261,7 @@ func SetApiRouter(router *gin.Engine) {
 			// User usage
 			modelQuotaRoute.GET("/user-usage", controller.GetUserModelQuotaUsage)
 			modelQuotaRoute.POST("/user-usage/:id/reset", controller.ResetUserModelQuotaUsage)
+			modelQuotaRoute.GET("/metrics", controller.GetUsageGovernanceMetrics)
 		}
 
 		// Custom OAuth provider management (root only)

@@ -46,7 +46,9 @@ func TestMain(m *testing.M) {
 		&model.Log{},
 		&model.Channel{},
 		&model.TopUp{},
+		&model.SubscriptionPlan{},
 		&model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
 	); err != nil {
@@ -69,6 +71,8 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM logs")
 		model.DB.Exec("DELETE FROM channels")
 		model.DB.Exec("DELETE FROM top_ups")
+		model.DB.Exec("DELETE FROM subscription_pre_consume_records")
+		model.DB.Exec("DELETE FROM subscription_plans")
 		model.DB.Exec("DELETE FROM user_subscriptions")
 		model.DB.Exec("DELETE FROM system_task_locks")
 		model.DB.Exec("DELETE FROM system_tasks")
@@ -379,6 +383,35 @@ func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 
 	// No log created
 	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestRefundTaskQuotaReversesStoredUsageContribution(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.UserModelQuotaUsage{}))
+	t.Cleanup(func() { model.DB.Exec("DELETE FROM user_model_quota_usage") })
+	const userID = 71_001
+	seedUser(t, userID, 1000)
+	usage := model.UserModelQuotaUsage{
+		UserId: userID, RuleId: 71_002, RuleSource: model.ModelQuotaRuleSourceUser,
+		ModelPattern: "*", QuotaLimit: 1000, QuotaUsed: 100,
+		PeriodStart: 1, PeriodEnd: 4_102_444_800, Status: model.ModelQuotaUsageStatusActive,
+	}
+	require.NoError(t, model.DB.Create(&usage).Error)
+	task := &model.Task{
+		TaskID: "task-usage-contribution-refund", UserId: userID, Quota: 100,
+		PrivateData: model.TaskPrivateData{UsageContribution: &model.TaskUsageContribution{
+			UsageIDs: []int{usage.Id}, Quota: 100, UsageDate: "2026-08-07",
+		}},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	require.True(t, RefundTaskQuota(context.Background(), task, "task failed"))
+	require.NoError(t, model.DB.First(&usage, usage.Id).Error)
+	require.Zero(t, usage.QuotaUsed)
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	require.Zero(t, stored.Quota)
+	require.Nil(t, stored.PrivateData.UsageContribution)
 }
 
 func TestRefundTaskQuota_NoToken(t *testing.T) {

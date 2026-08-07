@@ -22,6 +22,28 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(usageNotificationDeliveryHandler{})
+}
+
+type usageNotificationDeliveryHandler struct{}
+
+func (usageNotificationDeliveryHandler) Type() string {
+	return model.SystemTaskTypeUsageNotificationDelivery
+}
+
+func (usageNotificationDeliveryHandler) Enabled() bool { return true }
+
+func (usageNotificationDeliveryHandler) Interval() time.Duration { return time.Minute }
+
+func (usageNotificationDeliveryHandler) NewPayload() any { return nil }
+
+func (usageNotificationDeliveryHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	summary, err := service.DeliverUsageNotifications(ctx, runnerID)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, summary, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and

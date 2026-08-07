@@ -36,7 +36,17 @@ const (
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
+	ErrNoActiveSubscription           = errors.New("no active subscription")
 )
+
+type SubscriptionQuotaInsufficientError struct {
+	Remaining int64
+	Required  int64
+}
+
+func (e *SubscriptionQuotaInsufficientError) Error() string {
+	return fmt.Sprintf("subscription quota insufficient: remaining=%d required=%d", e.Remaining, e.Required)
+}
 
 const (
 	subscriptionPlanCacheNamespace     = "new-api:subscription_plan:v1"
@@ -1336,10 +1346,23 @@ func AdminResetPlanSubscriptions(planId int, advanceResetTime bool) (*Subscripti
 
 type SubscriptionPreConsumeResult struct {
 	UserSubscriptionId int
+	PlanId             int
 	PreConsumed        int64
 	AmountTotal        int64
 	AmountUsedBefore   int64
 	AmountUsedAfter    int64
+	StartTime          int64
+	EndTime            int64
+	LastResetTime      int64
+	NextResetTime      int64
+}
+
+func populateSubscriptionPreConsumePeriod(result *SubscriptionPreConsumeResult, sub *UserSubscription) {
+	result.PlanId = sub.PlanId
+	result.StartTime = sub.StartTime
+	result.EndTime = sub.EndTime
+	result.LastResetTime = sub.LastResetTime
+	result.NextResetTime = sub.NextResetTime
 }
 
 // ExpireDueSubscriptions marks expired subscriptions and handles group downgrade.
@@ -1544,6 +1567,7 @@ func preConsumeUserSubscriptionInternal(requestId string, userId int, modelName 
 			returnValue.AmountTotal = sub.AmountTotal
 			returnValue.AmountUsedBefore = sub.AmountUsed
 			returnValue.AmountUsedAfter = sub.AmountUsed
+			populateSubscriptionPreConsumePeriod(returnValue, &sub)
 			return nil
 		}
 
@@ -1556,11 +1580,12 @@ func preConsumeUserSubscriptionInternal(requestId string, userId int, modelName 
 		if err := subQuery.
 			Order("end_time asc, id asc").
 			Find(&subs).Error; err != nil {
-			return errors.New("no active subscription")
+			return err
 		}
 		if len(subs) == 0 {
-			return errors.New("no active subscription")
+			return ErrNoActiveSubscription
 		}
+		var maxRemaining int64
 		for _, candidate := range subs {
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
@@ -1573,6 +1598,12 @@ func preConsumeUserSubscriptionInternal(requestId string, userId int, modelName 
 			usedBefore := sub.AmountUsed
 			if sub.AmountTotal > 0 {
 				remain := sub.AmountTotal - usedBefore
+				if remain < 0 {
+					remain = 0
+				}
+				if remain > maxRemaining {
+					maxRemaining = remain
+				}
 				if remain < amount {
 					continue
 				}
@@ -1595,6 +1626,7 @@ func preConsumeUserSubscriptionInternal(requestId string, userId int, modelName 
 					returnValue.AmountTotal = sub.AmountTotal
 					returnValue.AmountUsedBefore = sub.AmountUsed
 					returnValue.AmountUsedAfter = sub.AmountUsed
+					populateSubscriptionPreConsumePeriod(returnValue, &sub)
 					return nil
 				}
 				return err
@@ -1608,9 +1640,10 @@ func preConsumeUserSubscriptionInternal(requestId string, userId int, modelName 
 			returnValue.AmountTotal = sub.AmountTotal
 			returnValue.AmountUsedBefore = usedBefore
 			returnValue.AmountUsedAfter = sub.AmountUsed
+			populateSubscriptionPreConsumePeriod(returnValue, &sub)
 			return nil
 		}
-		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
+		return &SubscriptionQuotaInsufficientError{Remaining: maxRemaining, Required: amount}
 	})
 	if err != nil {
 		return nil, err
@@ -1636,7 +1669,7 @@ func RefundSubscriptionPreConsume(requestId string) error {
 			record.Status = "refunded"
 			return tx.Save(&record).Error
 		}
-		if err := PostConsumeUserSubscriptionDelta(record.UserSubscriptionId, -record.PreConsumed); err != nil {
+		if err := postConsumeUserSubscriptionDeltaTx(tx, record.UserSubscriptionId, -record.PreConsumed); err != nil {
 			return err
 		}
 		record.Status = "refunded"
@@ -1735,22 +1768,30 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 		return nil
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		var sub UserSubscription
-		if err := lockForUpdate(tx).
-			Where("id = ?", userSubscriptionId).
-			First(&sub).Error; err != nil {
-			return err
-		}
-		newUsed := sub.AmountUsed + delta
-		if newUsed < 0 {
-			newUsed = 0
-		}
-		if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
-			return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
-		}
-		sub.AmountUsed = newUsed
-		return tx.Save(&sub).Error
+		return postConsumeUserSubscriptionDeltaTx(tx, userSubscriptionId, delta)
 	})
+}
+
+func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, delta int64) error {
+	var sub UserSubscription
+	if err := lockForUpdate(tx).
+		Where("id = ?", userSubscriptionId).
+		First(&sub).Error; err != nil {
+		return err
+	}
+	newUsed := sub.AmountUsed + delta
+	if newUsed < 0 {
+		newUsed = 0
+	}
+	if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
+		remaining := sub.AmountTotal - sub.AmountUsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		return &SubscriptionQuotaInsufficientError{Remaining: remaining, Required: delta}
+	}
+	sub.AmountUsed = newUsed
+	return tx.Save(&sub).Error
 }
 
 // GetActiveSubscriptionBindGroups returns the deduplicated bind_group values

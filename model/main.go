@@ -35,6 +35,13 @@ func CommonGroupColumnName() string {
 	return commonGroupCol
 }
 
+func CommonKeyColumnName() string {
+	if commonKeyCol == "" {
+		commonKeyCol = "`key`"
+	}
+	return commonKeyCol
+}
+
 func initCol() {
 	// init common column names
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
@@ -265,6 +272,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := mergeDuplicateModelQuotaUsage(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -302,6 +312,8 @@ func migrateDB() error {
 		&ModelQuotaPlanRule{},
 		&ModelQuotaUserRule{},
 		&UserModelQuotaUsage{},
+		&UserDailyUsageCounter{},
+		&UserNotificationEvent{},
 		&CasbinRule{},
 		&AuthzRole{},
 		&UsageReportSnapshot{},
@@ -312,6 +324,9 @@ func migrateDB() error {
 		&AutoGroupLearnedRule{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := initializeModelQuotaRuleScopes(); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
@@ -371,6 +386,8 @@ func migrateDBFast() error {
 		{&SystemInstance{}, "SystemInstance"},
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
+		{&UserDailyUsageCounter{}, "UserDailyUsageCounter"},
+		{&UserNotificationEvent{}, "UserNotificationEvent"},
 		{&UsageReportSnapshot{}, "UsageReportSnapshot"},
 		{&GroupMappingRule{}, "GroupMappingRule"},
 		{&FeishuGroupPackageMapping{}, "FeishuGroupPackageMapping"},

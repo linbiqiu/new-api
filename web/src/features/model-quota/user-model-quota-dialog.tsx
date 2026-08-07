@@ -1,6 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Loader2, RotateCcw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -8,11 +12,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Loader2, RotateCcw } from 'lucide-react'
-import { getUserModelQuotaUsage, resetUserModelQuotaUsage } from './api'
 import { formatQuota } from '@/lib/format'
+
+import { getUserModelQuotaUsage, resetUserModelQuotaUsage } from './api'
+import { formatTokensAsMillions } from './lib/token-units'
 import type { UserModelQuotaUsage } from './types'
 
 export function UserModelQuotaDialog({
@@ -29,14 +32,16 @@ export function UserModelQuotaDialog({
 
   const { data, isLoading } = useQuery({
     queryKey: ['user-model-quota-usage', userId],
-    queryFn: () => getUserModelQuotaUsage(userId!),
+    queryFn: () => getUserModelQuotaUsage(userId as number),
     enabled: !!userId && open,
   })
 
   const resetMutation = useMutation({
     mutationFn: resetUserModelQuotaUsage,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['user-model-quota-usage', userId] })
+      queryClient.invalidateQueries({
+        queryKey: ['user-model-quota-usage', userId],
+      })
       toast.success(t('额度重置成功'))
     },
     onError: () => toast.error(t('额度重置失败')),
@@ -57,70 +62,105 @@ export function UserModelQuotaDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className='max-w-2xl'>
         <DialogHeader>
-          <DialogTitle>{t('模型额度使用情况')}</DialogTitle>
+          <DialogTitle>{t('用量限制使用情况')}</DialogTitle>
           <DialogDescription>
-            {t('该用户各模型的额度消耗情况。')}
+            {t('该用户当前周期的金额与 Token 使用情况。')}
           </DialogDescription>
         </DialogHeader>
 
         {isLoading ? (
-          <div className="flex justify-center py-8">
-            <Loader2 className="size-6 animate-spin" />
+          <div className='flex justify-center py-8'>
+            <Loader2 className='size-6 animate-spin' />
           </div>
         ) : usages.length === 0 ? (
-          <div className="text-center text-muted-foreground py-8">
-            {t('该用户暂无模型额度限制。')}
+          <div className='text-muted-foreground py-8 text-center'>
+            {t('该用户暂无用量限制。')}
           </div>
         ) : (
-          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+          <div className='max-h-[60vh] space-y-3 overflow-y-auto'>
             {usages.map((usage) => {
-              const percent = usage.usage_percent ?? 0
-              const remain = usage.quota_remain ?? (usage.quota_limit - usage.quota_used)
+              const quotaPercent =
+                usage.quota_usage_percent ?? usage.usage_percent ?? 0
+              const tokenPercent = usage.token_usage_percent ?? 0
+              const remain =
+                usage.quota_remain ?? usage.quota_limit - usage.quota_used
+              const tokenRemain =
+                usage.token_remain ?? usage.token_limit - usage.token_used
               return (
-                <div key={usage.id} className="space-y-1 rounded-lg border p-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-medium">{usage.model_pattern}</span>
-                      <Badge variant="secondary">
+                <div key={usage.id} className='space-y-1 rounded-lg border p-3'>
+                  <div className='flex items-center justify-between'>
+                    <div className='flex items-center gap-2'>
+                      <span className='font-mono font-medium'>
+                        {usage.model_pattern || t('全部模型')}
+                      </span>
+                      <Badge variant='secondary'>
                         {ruleSourceText[usage.rule_source] ?? usage.rule_source}
                       </Badge>
                       {usage.status === 'expired' && (
-                        <Badge variant="outline">{t('已过期')}</Badge>
+                        <Badge variant='outline'>{t('已过期')}</Badge>
                       )}
                     </div>
                     <Button
-                      variant="ghost"
-                      size="sm"
+                      variant='ghost'
+                      size='sm'
                       onClick={() => resetMutation.mutate(usage.id)}
                       disabled={resetMutation.isPending}
                     >
-                      <RotateCcw className="size-3 mr-1" />
+                      <RotateCcw className='mr-1 size-3' />
                       {t('重置')}
                     </Button>
                   </div>
 
-                  {/* Progress bar */}
-                  <div className="relative h-2 w-full rounded-full bg-muted">
-                    <div
-                      className={`absolute left-0 top-0 h-2 rounded-full transition-all ${getProgressColor(percent)}`}
-                      style={{ width: `${Math.min(percent, 100)}%` }}
-                    />
-                  </div>
-
-                  {/* Stats */}
-                  <div className="flex items-center justify-between text-sm text-muted-foreground">
-                    <span>
-                      {t('已用')}: {formatQuota(usage.quota_used)} / {formatQuota(usage.quota_limit)}
-                    </span>
-                    <span>
-                      {t('剩余')}: {formatQuota(remain)}
-                    </span>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {percent.toFixed(1)}% {t('已消耗')}
-                  </div>
+                  {usage.quota_limit > 0 && (
+                    <div className='space-y-1'>
+                      <div className='text-muted-foreground flex justify-between text-xs'>
+                        <span>{t('金额用量')}</span>
+                        <span>{quotaPercent.toFixed(1)}%</span>
+                      </div>
+                      <div className='bg-muted relative h-2 w-full rounded-full'>
+                        <div
+                          className={`absolute top-0 left-0 h-2 rounded-full transition-all ${getProgressColor(quotaPercent)}`}
+                          style={{ width: `${Math.min(quotaPercent, 100)}%` }}
+                        />
+                      </div>
+                      <div className='text-muted-foreground flex justify-between text-sm'>
+                        <span>
+                          {t('已用')}: {formatQuota(usage.quota_used)} /{' '}
+                          {formatQuota(usage.quota_limit)}
+                        </span>
+                        <span>
+                          {t('剩余')}: {formatQuota(remain)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  {usage.token_limit > 0 && (
+                    <div className='space-y-1'>
+                      <div className='text-muted-foreground flex justify-between text-xs'>
+                        <span>{t('Token 用量')}</span>
+                        <span>{tokenPercent.toFixed(1)}%</span>
+                      </div>
+                      <div className='bg-muted relative h-2 w-full rounded-full'>
+                        <div
+                          className={`absolute top-0 left-0 h-2 rounded-full transition-all ${getProgressColor(tokenPercent)}`}
+                          style={{ width: `${Math.min(tokenPercent, 100)}%` }}
+                        />
+                      </div>
+                      <div className='text-muted-foreground flex justify-between text-sm'>
+                        <span>
+                          {t('已用')}:{' '}
+                          {formatTokensAsMillions(usage.token_used)} M /{' '}
+                          {formatTokensAsMillions(usage.token_limit)} M
+                        </span>
+                        <span>
+                          {t('剩余')}:{' '}
+                          {formatTokensAsMillions(Math.max(0, tokenRemain))} M
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )
             })}

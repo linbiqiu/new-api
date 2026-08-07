@@ -80,6 +80,8 @@ type SubscriptionFunding struct {
 	AmountUsedAfter int64
 	PlanId          int
 	PlanTitle       string
+	PeriodStart     int64
+	PeriodEnd       int64
 }
 
 func (s *SubscriptionFunding) Source() string { return BillingSourceSubscription }
@@ -100,9 +102,17 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.preConsumed = res.PreConsumed
 	s.AmountTotal = res.AmountTotal
 	s.AmountUsedAfter = res.AmountUsedAfter
+	s.PlanId = res.PlanId
+	s.PeriodStart = res.LastResetTime
+	if s.PeriodStart <= 0 {
+		s.PeriodStart = res.StartTime
+	}
+	s.PeriodEnd = res.NextResetTime
+	if s.PeriodEnd <= 0 {
+		s.PeriodEnd = res.EndTime
+	}
 	// 获取订阅计划信息
 	if planInfo, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(res.UserSubscriptionId); err == nil && planInfo != nil {
-		s.PlanId = planInfo.PlanId
 		s.PlanTitle = planInfo.PlanTitle
 	}
 	return nil

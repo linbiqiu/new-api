@@ -13,52 +13,96 @@ import (
 type modelQuotaUsageCacheFields struct {
 	QuotaUsed  int64 `json:"quota_used"`
 	QuotaLimit int64 `json:"quota_limit"`
+	TokenUsed  int64 `json:"token_used"`
+	TokenLimit int64 `json:"token_limit"`
 	PeriodEnd  int64 `json:"period_end"`
+}
+
+type ModelQuotaUsageSnapshot struct {
+	QuotaUsed  int64
+	QuotaLimit int64
+	TokenUsed  int64
+	TokenLimit int64
 }
 
 func modelQuotaUsageCacheKey(usageId int) string {
 	return fmt.Sprintf("model_quota_usage:%d", usageId)
 }
 
-// CacheIncrModelQuotaUsage atomically increments quota_used in Redis
-func CacheIncrModelQuotaUsage(usageId int, delta int64) {
+// CacheIncrModelQuotaUsage atomically increments both usage metrics in Redis.
+func CacheIncrModelQuotaUsage(usageId int, quotaDelta, tokenDelta int64) error {
 	if !common.RedisEnabled {
-		return
+		return nil
 	}
 	key := modelQuotaUsageCacheKey(usageId)
-	// RedisHIncrBy only updates if the key has a TTL (existing key)
-	_ = common.RedisHIncrBy(key, "QuotaUsed", delta)
+	return common.RDB.Eval(context.Background(), `
+		if redis.call('PTTL', KEYS[1]) > 0 then
+			redis.call('HINCRBY', KEYS[1], 'QuotaUsed', ARGV[1])
+			redis.call('HINCRBY', KEYS[1], 'TokenUsed', ARGV[2])
+			return 1
+		end
+		return 0
+	`, []string{key}, quotaDelta, tokenDelta).Err()
 }
 
-// CacheGetModelQuotaUsage reads quota_used from Redis cache
-func CacheGetModelQuotaUsage(usageId int) (used int64, limit int64, ok bool) {
+// CacheGetModelQuotaUsage reads both usage metrics from Redis cache.
+func CacheGetModelQuotaUsage(usageId int) (ModelQuotaUsageSnapshot, bool, error) {
 	if !common.RedisEnabled {
-		return 0, 0, false
+		return ModelQuotaUsageSnapshot{}, false, nil
 	}
 	key := modelQuotaUsageCacheKey(usageId)
-	var fields modelQuotaUsageCacheFields
-	if err := common.RedisHGetObj(key, &fields); err != nil {
-		return 0, 0, false
+	fields, err := common.RDB.HGetAll(context.Background(), key).Result()
+	if err != nil {
+		return ModelQuotaUsageSnapshot{}, false, fmt.Errorf("get model quota usage cache: %w", err)
 	}
-	return fields.QuotaUsed, fields.QuotaLimit, true
+	if len(fields) == 0 {
+		return ModelQuotaUsageSnapshot{}, false, nil
+	}
+	for _, requiredField := range []string{"QuotaUsed", "QuotaLimit", "TokenUsed", "TokenLimit"} {
+		if _, exists := fields[requiredField]; !exists {
+			return ModelQuotaUsageSnapshot{}, false, nil
+		}
+	}
+
+	var snapshot ModelQuotaUsageSnapshot
+	values := map[string]*int64{
+		"QuotaUsed":  &snapshot.QuotaUsed,
+		"QuotaLimit": &snapshot.QuotaLimit,
+		"TokenUsed":  &snapshot.TokenUsed,
+		"TokenLimit": &snapshot.TokenLimit,
+	}
+	for field, target := range values {
+		value, exists := fields[field]
+		if !exists {
+			continue
+		}
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return ModelQuotaUsageSnapshot{}, false, fmt.Errorf("parse model quota usage cache field %s: %w", field, err)
+		}
+		*target = parsed
+	}
+	return snapshot, true, nil
 }
 
 // CacheSetModelQuotaUsage initializes the Redis cache for a usage record with TTL
-func CacheSetModelQuotaUsage(usageId int, quotaUsed int64, quotaLimit int64, periodEnd int64) {
+func CacheSetModelQuotaUsage(usageId int, snapshot ModelQuotaUsageSnapshot, periodEnd int64) error {
 	if !common.RedisEnabled {
-		return
+		return nil
 	}
 	key := modelQuotaUsageCacheKey(usageId)
 	ttl := time.Duration(periodEnd-time.Now().Unix()) * time.Second
 	if ttl <= 0 {
-		return
+		return nil
 	}
 	fields := &modelQuotaUsageCacheFields{
-		QuotaUsed:  quotaUsed,
-		QuotaLimit: quotaLimit,
+		QuotaUsed:  snapshot.QuotaUsed,
+		QuotaLimit: snapshot.QuotaLimit,
+		TokenUsed:  snapshot.TokenUsed,
+		TokenLimit: snapshot.TokenLimit,
 		PeriodEnd:  periodEnd,
 	}
-	_ = common.RedisHSetObj(key, fields, ttl)
+	return common.RedisHSetObj(key, fields, ttl)
 }
 
 // CacheDeleteModelQuotaUsage removes the Redis cache for a usage record

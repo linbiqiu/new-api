@@ -53,7 +53,7 @@ function normalizeNotifyType(value: unknown): NotifyType {
   return typeof value === 'string' &&
     NOTIFICATION_VALUES.has(value as NotifyType)
     ? (value as NotifyType)
-    : 'email'
+    : 'feishu_app'
 }
 
 // ============================================================================
@@ -70,7 +70,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
   const isAdmin = (profile?.role ?? 0) >= ROLE.ADMIN
   const [loading, setLoading] = useState(false)
   const [settings, setSettings] = useState<UserSettings>({
-    notify_type: 'email',
+    notify_type: undefined,
     quota_warning_threshold: DEFAULT_QUOTA_WARNING_THRESHOLD,
     notification_email: '',
     webhook_url: '',
@@ -82,6 +82,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
     accept_unset_model_ratio_model: false,
     record_ip_log: false,
     upstream_model_update_notify_enabled: false,
+    daily_token_milestone_notify: true,
   })
 
   // Update form field helper
@@ -96,7 +97,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
     if (profile?.setting) {
       const parsed = parseUserSettings(profile.setting)
       setSettings({
-        notify_type: normalizeNotifyType(parsed.notify_type),
+        notify_type: parsed.notify_type,
         quota_warning_threshold:
           parsed.quota_warning_threshold ?? DEFAULT_QUOTA_WARNING_THRESHOLD,
         notification_email: parsed.notification_email ?? '',
@@ -111,6 +112,8 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
         record_ip_log: parsed.record_ip_log || false,
         upstream_model_update_notify_enabled:
           parsed.upstream_model_update_notify_enabled || false,
+        daily_token_milestone_notify:
+          parsed.daily_token_milestone_notify ?? true,
       })
     }
   }, [profile])
@@ -151,7 +154,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
           variant='outline'
           size='lg'
           spacing={2}
-          className='grid w-full grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3'
+          className='grid w-full grid-cols-2 gap-2 sm:grid-cols-5 sm:gap-3'
         >
           {NOTIFICATION_METHODS.map((method) => {
             const Icon = NOTIFICATION_ICONS[method.value]
@@ -335,6 +338,27 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
           <p className='text-muted-foreground mt-1 text-xs'>
             {t('Configure your account behavior preferences')}
           </p>
+        </div>
+
+        <div className='flex items-start justify-between gap-3 rounded-lg border p-3 sm:items-center sm:p-4'>
+          <div className='space-y-0.5'>
+            <Label htmlFor='dailyTokenMilestoneNotify'>
+              {t('Daily Token Usage Reminders')}
+            </Label>
+            <p className='text-muted-foreground text-xs sm:text-sm'>
+              {t(
+                'Receive a usage summary whenever today’s Token usage reaches the next 100M milestone.'
+              )}
+            </p>
+          </div>
+          <Switch
+            id='dailyTokenMilestoneNotify'
+            className='shrink-0'
+            checked={settings.daily_token_milestone_notify ?? true}
+            onCheckedChange={(checked) =>
+              updateField('daily_token_milestone_notify', checked)
+            }
+          />
         </div>
 
         {/* Receive Upstream Model Update Notifications (admin only) */}

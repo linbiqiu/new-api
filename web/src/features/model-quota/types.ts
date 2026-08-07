@@ -3,16 +3,26 @@ import { z } from 'zod'
 export const matchModeSchema = z.enum(['exact', 'prefix'])
 export type MatchMode = z.infer<typeof matchModeSchema>
 
-export const modelQuotaPeriodSchema = z.enum(['total', 'daily', 'weekly', 'monthly'])
+export const modelQuotaScopeSchema = z.enum(['model', 'all'])
+export type ModelQuotaScope = z.infer<typeof modelQuotaScopeSchema>
+
+export const modelQuotaPeriodSchema = z.enum([
+  'total',
+  'daily',
+  'weekly',
+  'monthly',
+])
 export type ModelQuotaPeriod = z.infer<typeof modelQuotaPeriodSchema>
 
 export const modelQuotaGroupRuleSchema = z.object({
   id: z.number(),
   group_name: z.string(),
+  scope: modelQuotaScopeSchema.default('model'),
   model_pattern: z.string(),
   match_mode: matchModeSchema,
   period: modelQuotaPeriodSchema.default('total'),
   quota_limit: z.number(),
+  token_limit: z.number().default(0),
   enabled: z.boolean(),
   sort_order: z.number(),
   created_at: z.number(),
@@ -23,9 +33,11 @@ export type ModelQuotaGroupRule = z.infer<typeof modelQuotaGroupRuleSchema>
 export const modelQuotaPlanRuleSchema = z.object({
   id: z.number(),
   plan_id: z.number(),
+  scope: modelQuotaScopeSchema.default('model'),
   model_pattern: z.string(),
   match_mode: matchModeSchema,
   quota_limit: z.number(),
+  token_limit: z.number().default(0),
   enabled: z.boolean(),
   sort_order: z.number(),
   created_at: z.number(),
@@ -37,10 +49,12 @@ export const modelQuotaUserRuleSchema = z.object({
   id: z.number(),
   user_id: z.number(),
   username: z.string(),
+  scope: modelQuotaScopeSchema.default('model'),
   model_pattern: z.string(),
   match_mode: matchModeSchema,
   period: modelQuotaPeriodSchema.default('monthly'),
   quota_limit: z.number(),
+  token_limit: z.number().default(0),
   enabled: z.boolean(),
   sort_order: z.number(),
   created_at: z.number(),
@@ -57,7 +71,12 @@ export const userModelQuotaUsageSchema = z.object({
   subscription_id: z.number(),
   quota_limit: z.number(),
   quota_used: z.number(),
+  token_limit: z.number().default(0),
+  token_used: z.number().default(0),
   quota_remain: z.number().optional(),
+  token_remain: z.number().optional(),
+  quota_usage_percent: z.number().optional(),
+  token_usage_percent: z.number().optional(),
   usage_percent: z.number().optional(),
   period_start: z.number(),
   period_end: z.number(),
@@ -98,32 +117,49 @@ export interface PaginatedResponse<T> {
 
 export interface CreateGroupRuleParams {
   group_name: string
+  scope: ModelQuotaScope
   model_pattern: string
   match_mode: MatchMode
   period: ModelQuotaPeriod
   quota_limit: number
+  token_limit: number
   enabled?: boolean
   sort_order?: number
 }
 
 export interface CreatePlanRuleParams {
   plan_id: number
+  scope: ModelQuotaScope
   model_pattern: string
   match_mode: MatchMode
   quota_limit: number
+  token_limit: number
   enabled?: boolean
   sort_order?: number
 }
 
 export interface CreateUserRuleParams {
   user_id: number
+  scope: ModelQuotaScope
   username?: string
   model_pattern: string
   match_mode: MatchMode
   period: ModelQuotaPeriod
   quota_limit: number
+  token_limit: number
   enabled?: boolean
   sort_order?: number
 }
 
-export type ModelQuotaDialogType = 'create-group' | 'update-group' | 'delete-group' | 'create-plan' | 'update-plan' | 'delete-plan' | 'create-user' | 'update-user' | 'delete-user' | 'user-usage' | 'reset-usage'
+export type ModelQuotaDialogType =
+  | 'create-group'
+  | 'update-group'
+  | 'delete-group'
+  | 'create-plan'
+  | 'update-plan'
+  | 'delete-plan'
+  | 'create-user'
+  | 'update-user'
+  | 'delete-user'
+  | 'user-usage'
+  | 'reset-usage'

@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -48,7 +49,7 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
 // 否则回退到旧的 PostConsumeQuota 路径（兼容按次计费等场景）。
-func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
+func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int, actualTokens int64) error {
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
 		delta := actualQuota - preConsumed
@@ -75,16 +76,26 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 			return err
 		}
 
-		// 发送额度通知（订阅计费使用订阅剩余额度）
+		// 发送额度通知
 		if actualQuota != 0 {
-			if relayInfo.BillingSource == BillingSourceSubscription {
-				checkAndSendSubscriptionQuotaNotify(relayInfo)
-			} else {
+			if relayInfo.BillingSource != BillingSourceSubscription {
 				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
 			}
 		}
+		billingSession, _ := relayInfo.Billing.(*BillingSession)
+		if digest, ok := subscriptionDigestFromBilling(billingSession); ok {
+			if _, err := createSubscription80Event(relayInfo.UserId, digest); err != nil {
+				logger.LogError(ctx, "create subscription usage reminder failed: "+err.Error())
+			}
+		}
 		// Model quota observation (non-blocking, does not affect billing)
-		recordModelQuotaFromContext(ctx, actualQuota)
+		if err := recordModelQuotaFromContext(ctx, actualQuota, actualTokens); err != nil {
+			RecordUsageGovernanceCounterError()
+			logger.LogError(ctx, "record usage limit counters failed: "+err.Error())
+		}
+		if err := recordSettledDailyUsage(relayInfo.UserId, int64(actualQuota), actualTokens, time.Now(), relayInfo.UserSetting.DailyTokenMilestoneNotifyEnabled()); err != nil {
+			logger.LogError(ctx, "record daily usage reminder counter failed: "+err.Error())
+		}
 		return nil
 	}
 
@@ -97,6 +108,12 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 	}
 
 	// Model quota observation (non-blocking, does not affect billing)
-	recordModelQuotaFromContext(ctx, actualQuota)
+	if err := recordModelQuotaFromContext(ctx, actualQuota, actualTokens); err != nil {
+		RecordUsageGovernanceCounterError()
+		logger.LogError(ctx, "record usage limit counters failed: "+err.Error())
+	}
+	if err := recordSettledDailyUsage(relayInfo.UserId, int64(actualQuota), actualTokens, time.Now(), relayInfo.UserSetting.DailyTokenMilestoneNotifyEnabled()); err != nil {
+		logger.LogError(ctx, "record daily usage reminder counter failed: "+err.Error())
+	}
 	return nil
 }

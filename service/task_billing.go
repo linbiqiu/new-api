@@ -160,6 +160,31 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
+func adjustTaskUsageContribution(task *model.Task, actualQuota int64) error {
+	contribution := task.PrivateData.UsageContribution
+	if contribution == nil || contribution.Quota == actualQuota {
+		return nil
+	}
+	delta := actualQuota - contribution.Quota
+	if err := model.AdjustTaskModelQuotaUsage(contribution.UsageIDs, delta); err != nil {
+		return err
+	}
+	contribution.Quota = actualQuota
+	return nil
+}
+
+func reverseTaskUsageContribution(task *model.Task) error {
+	contribution := task.PrivateData.UsageContribution
+	if contribution == nil || contribution.Quota <= 0 {
+		return nil
+	}
+	if err := model.AdjustTaskModelQuotaUsage(contribution.UsageIDs, -contribution.Quota); err != nil {
+		return err
+	}
+	task.PrivateData.UsageContribution = nil
+	return nil
+}
+
 // RefundTaskQuota 统一的任务失败退款逻辑。
 // 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
 // 返回资金来源是否已成功退还；失败时保留 quota，供显式重试或人工对账。
@@ -177,6 +202,9 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 
 	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
+	if err := reverseTaskUsageContribution(task); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("撤销任务用量限制贡献失败 task %s: %s", task.TaskID, err.Error()))
+	}
 
 	// 3. 记录日志
 	other := taskBillingOther(task)
@@ -197,7 +225,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	// 4. 资金退款完成后再清除持久化标记。
 	// 回写失败必须显式告警，避免漏掉潜在的重复退款风险。
 	task.Quota = 0
-	if err := task.UpdateQuota(); err != nil {
+	if err := task.UpdateQuotaAndPrivateData(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
 	return true
@@ -236,9 +264,12 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 
 	// 调整令牌额度
 	taskAdjustTokenQuota(ctx, task, quotaDelta)
+	if err := adjustTaskUsageContribution(task, int64(actualQuota)); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("调整任务用量限制贡献失败 task %s: %s", task.TaskID, err.Error()))
+	}
 
 	task.Quota = actualQuota
-	if err := task.UpdateQuota(); err != nil {
+	if err := task.UpdateQuotaAndPrivateData(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("差额结算回写 quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
 
