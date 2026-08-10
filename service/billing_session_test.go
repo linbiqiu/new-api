@@ -208,3 +208,39 @@ func TestBillingSessionWalletFallbackDoesNotApplyPlanRules(t *testing.T) {
 	_, exists := ctx.Get(modelQuotaUsageContextKey)
 	require.False(t, exists)
 }
+
+func TestBillingSessionDefaultBindGroupSubscriptionFallsBackToWallet(t *testing.T) {
+	prepareBillingQuotaErrorTest(t)
+	const userID, tokenID = 34_001, 34_002
+	const tokenKey = "default-bind-group-wallet-fallback"
+	plan := model.SubscriptionPlan{
+		Title: "默认钱包接续套餐", BindGroup: "company_default_fallback",
+		DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		TotalAmount: 100, Enabled: true,
+	}
+	require.NoError(t, model.DB.Create(&plan).Error)
+	require.NoError(t, model.DB.Create(&model.User{
+		Id: userID, Username: "default-bind-group-user", Group: plan.BindGroup,
+		Quota: 1000, Status: common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{
+		Id: tokenID, UserId: userID, Key: tokenKey, Name: "default-bind-group",
+		Status: common.TokenStatusEnabled, RemainQuota: 1000,
+	}).Error)
+	require.NoError(t, model.SyncUserBindGroupSubscriptions(userID, "", plan.BindGroup))
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).
+		Where("user_id = ? AND plan_id = ? AND source = ?", userID, plan.Id, "bind_group").
+		Update("amount_used", plan.TotalAmount).Error)
+
+	session, apiErr := NewBillingSession(
+		newBillingQuotaTestContext(),
+		newBillingQuotaRelayInfo(userID, tokenID, tokenKey, "subscription_first"),
+		20,
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, BillingSourceWallet, session.funding.Source())
+
+	userQuota, err := model.GetUserQuota(userID, false)
+	require.NoError(t, err)
+	require.Equal(t, 980, userQuota)
+}

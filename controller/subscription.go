@@ -357,10 +357,15 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 
+	walletOverflowChanged := req.Plan.AllowWalletOverflow != nil &&
+		oldPlan.WalletOverflowAllowed() != *req.Plan.AllowWalletOverflow
 	if oldPlan.BindGroup != req.Plan.BindGroup {
 		go model.SyncPlanBindGroupChange(id, oldPlan.BindGroup, req.Plan.BindGroup, req.Plan.TotalAmount)
 	} else if oldPlan.TotalAmount != req.Plan.TotalAmount {
 		go model.SyncPlanTotalAmountChange(id, req.Plan.TotalAmount)
+	}
+	if walletOverflowChanged {
+		go model.SyncPlanWalletOverflowChange(id, *req.Plan.AllowWalletOverflow)
 	}
 
 	model.InvalidateSubscriptionPlanCache(id)

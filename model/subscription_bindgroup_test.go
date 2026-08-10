@@ -278,6 +278,69 @@ func TestPreConsumeUserSubscription_IncludesPermanentBindGroupSubscription(t *te
 	assert.Equal(t, int64(100), result.AmountUsedAfter)
 }
 
+func TestSyncUserBindGroupSubscriptionsPropagatesWalletOverflowPolicy(t *testing.T) {
+	truncateTablesForSubscription(t)
+
+	plan := &SubscriptionPlan{
+		Title:       "公司自动分配套餐",
+		BindGroup:   "company_wallet_fallback",
+		Enabled:     true,
+		TotalAmount: 1000,
+	}
+	require.NoError(t, DB.Create(plan).Error)
+	user := &User{
+		Username: "test_user_wallet_fallback",
+		Password: "test",
+		Status:   common.UserStatusEnabled,
+		Group:    plan.BindGroup,
+	}
+	require.NoError(t, DB.Create(user).Error)
+
+	require.NoError(t, SyncUserBindGroupSubscriptions(user.Id, "", plan.BindGroup))
+	var subscription UserSubscription
+	require.NoError(t, DB.Where("user_id = ? AND plan_id = ? AND source = ?", user.Id, plan.Id, "bind_group").First(&subscription).Error)
+	assert.True(t, subscription.AllowWalletOverflow, "nil plan policy must preserve the default wallet fallback")
+
+	allowWalletOverflow := false
+	require.NoError(t, DB.Model(plan).Update("allow_wallet_overflow", allowWalletOverflow).Error)
+	require.NoError(t, SyncUserBindGroupSubscriptions(user.Id, plan.BindGroup, plan.BindGroup))
+	require.NoError(t, DB.First(&subscription, subscription.Id).Error)
+	assert.False(t, subscription.AllowWalletOverflow, "existing bind-group subscriptions must follow explicit plan policy")
+
+	SyncPlanWalletOverflowChange(plan.Id, true)
+	require.NoError(t, DB.First(&subscription, subscription.Id).Error)
+	assert.True(t, subscription.AllowWalletOverflow, "plan policy updates must propagate to bind-group subscriptions")
+}
+
+func TestRepairBindGroupSubscriptionsHealsWalletOverflowSnapshot(t *testing.T) {
+	truncateTablesForSubscription(t)
+
+	plan := &SubscriptionPlan{
+		Title:       "默认允许钱包接续套餐",
+		BindGroup:   "company_repair_fallback",
+		Enabled:     true,
+		TotalAmount: 1000,
+	}
+	require.NoError(t, DB.Create(plan).Error)
+	user := &User{
+		Username: "test_user_repair_fallback",
+		Password: "test",
+		Status:   common.UserStatusEnabled,
+		Group:    plan.BindGroup,
+	}
+	require.NoError(t, DB.Create(user).Error)
+	subscription := &UserSubscription{
+		UserId: user.Id, PlanId: plan.Id, AmountTotal: plan.TotalAmount,
+		StartTime: common.GetTimestamp(), EndTime: 0, Status: "active", Source: "bind_group",
+		AllowWalletOverflow: false,
+	}
+	require.NoError(t, DB.Create(subscription).Error)
+
+	RepairBindGroupSubscriptions()
+	require.NoError(t, DB.First(subscription, subscription.Id).Error)
+	assert.True(t, subscription.AllowWalletOverflow)
+}
+
 // 辅助函数：清理订阅相关表
 func truncateTablesForSubscription(t *testing.T) {
 	t.Helper()

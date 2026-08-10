@@ -222,6 +222,10 @@ func (p *SubscriptionPlan) NormalizeDefaults() {
 	}
 }
 
+func (p *SubscriptionPlan) WalletOverflowAllowed() bool {
+	return p != nil && (p.AllowWalletOverflow == nil || *p.AllowWalletOverflow)
+}
+
 // Subscription order (payment -> webhook -> create UserSubscription)
 type SubscriptionOrder struct {
 	Id     int     `json:"id"`
@@ -541,10 +545,6 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			}
 		}
 	}
-	allowWalletOverflow := true
-	if plan.AllowWalletOverflow != nil {
-		allowWalletOverflow = *plan.AllowWalletOverflow
-	}
 	sub := &UserSubscription{
 		UserId:              userId,
 		PlanId:              plan.Id,
@@ -559,7 +559,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		UpgradeGroup:        upgradeGroup,
 		PrevUserGroup:       prevGroup,
 		DowngradeGroup:      strings.TrimSpace(plan.DowngradeGroup),
-		AllowWalletOverflow: allowWalletOverflow,
+		AllowWalletOverflow: plan.WalletOverflowAllowed(),
 		CreatedAt:           common.GetTimestamp(),
 		UpdatedAt:           common.GetTimestamp(),
 	}
@@ -936,6 +936,7 @@ func SyncUserBindGroupSubscriptions(userId int, oldGroup, newGroup string) error
 		nowUnix := GetDBTimestamp()
 		now := common.GetTimestamp()
 		for _, p := range newPlans {
+			allowWalletOverflow := p.WalletOverflowAllowed()
 			var sub UserSubscription
 			err := DB.Where("user_id = ? AND plan_id = ? AND source = ?", userId, p.Id, "bind_group").First(&sub).Error
 			if err == nil {
@@ -944,11 +945,12 @@ func SyncUserBindGroupSubscriptions(userId int, oldGroup, newGroup string) error
 					amountUsed = carriedUsed
 				}
 				if err := DB.Model(&sub).Updates(map[string]interface{}{
-					"amount_total": p.TotalAmount,
-					"amount_used":  amountUsed,
-					"end_time":     int64(0),
-					"status":       "active",
-					"updated_at":   now,
+					"amount_total":          p.TotalAmount,
+					"amount_used":           amountUsed,
+					"end_time":              int64(0),
+					"status":                "active",
+					"allow_wallet_overflow": allowWalletOverflow,
+					"updated_at":            now,
 				}).Error; err != nil {
 					return err
 				}
@@ -958,16 +960,17 @@ func SyncUserBindGroupSubscriptions(userId int, oldGroup, newGroup string) error
 				return err
 			}
 			sub = UserSubscription{
-				UserId:      userId,
-				PlanId:      p.Id,
-				AmountTotal: p.TotalAmount,
-				AmountUsed:  carriedUsed,
-				StartTime:   nowUnix,
-				EndTime:     0,
-				Status:      "active",
-				Source:      "bind_group",
-				CreatedAt:   now,
-				UpdatedAt:   now,
+				UserId:              userId,
+				PlanId:              p.Id,
+				AmountTotal:         p.TotalAmount,
+				AmountUsed:          carriedUsed,
+				StartTime:           nowUnix,
+				EndTime:             0,
+				Status:              "active",
+				Source:              "bind_group",
+				AllowWalletOverflow: allowWalletOverflow,
+				CreatedAt:           now,
+				UpdatedAt:           now,
 			}
 			if err := DB.Create(&sub).Error; err != nil {
 				common.SysLog(fmt.Sprintf("SyncUserBindGroupSubscriptions: failed to create sub for user %d plan %d: %s", userId, p.Id, err.Error()))
@@ -1016,6 +1019,17 @@ func SyncPlanTotalAmountChange(planId int, totalAmount int64) {
 	}
 }
 
+func SyncPlanWalletOverflowChange(planId int, allowWalletOverflow bool) {
+	if planId <= 0 {
+		return
+	}
+	if err := DB.Model(&UserSubscription{}).
+		Where("plan_id = ? AND source = ?", planId, "bind_group").
+		Update("allow_wallet_overflow", allowWalletOverflow).Error; err != nil {
+		common.SysLog(fmt.Sprintf("SyncPlanWalletOverflowChange: failed to update plan %d allow_wallet_overflow=%t: %s", planId, allowWalletOverflow, err.Error()))
+	}
+}
+
 func RepairBindGroupSubscriptions() {
 	var plans []SubscriptionPlan
 	if err := DB.Where("bind_group != '' AND bind_group IS NOT NULL AND enabled = ?", true).Find(&plans).Error; err != nil || len(plans) == 0 {
@@ -1025,6 +1039,11 @@ func RepairBindGroupSubscriptions() {
 	groupPlanMap := make(map[string][]SubscriptionPlan)
 	for _, p := range plans {
 		groupPlanMap[p.BindGroup] = append(groupPlanMap[p.BindGroup], p)
+		if err := DB.Model(&UserSubscription{}).
+			Where("plan_id = ? AND source = ?", p.Id, "bind_group").
+			Update("allow_wallet_overflow", p.WalletOverflowAllowed()).Error; err != nil {
+			common.SysLog(fmt.Sprintf("RepairBindGroupSubscriptions: failed to sync wallet overflow for plan %d: %s", p.Id, err.Error()))
+		}
 	}
 
 	for group, groupPlans := range groupPlanMap {
@@ -1034,6 +1053,7 @@ func RepairBindGroupSubscriptions() {
 		}
 		for _, u := range users {
 			for _, p := range groupPlans {
+				allowWalletOverflow := p.WalletOverflowAllowed()
 				var count int64
 				DB.Model(&UserSubscription{}).
 					Where("user_id = ? AND plan_id = ?", u.Id, p.Id).
@@ -1042,16 +1062,17 @@ func RepairBindGroupSubscriptions() {
 					continue
 				}
 				sub := &UserSubscription{
-					UserId:      u.Id,
-					PlanId:      p.Id,
-					AmountTotal: p.TotalAmount,
-					AmountUsed:  0,
-					StartTime:   GetDBTimestamp(),
-					EndTime:     0,
-					Status:      "active",
-					Source:      "bind_group",
-					CreatedAt:   common.GetTimestamp(),
-					UpdatedAt:   common.GetTimestamp(),
+					UserId:              u.Id,
+					PlanId:              p.Id,
+					AmountTotal:         p.TotalAmount,
+					AmountUsed:          0,
+					StartTime:           GetDBTimestamp(),
+					EndTime:             0,
+					Status:              "active",
+					Source:              "bind_group",
+					AllowWalletOverflow: allowWalletOverflow,
+					CreatedAt:           common.GetTimestamp(),
+					UpdatedAt:           common.GetTimestamp(),
 				}
 				if err := DB.Create(sub).Error; err != nil {
 					common.SysLog(fmt.Sprintf("RepairBindGroupSubscriptions: failed for user %d plan %d: %s", u.Id, p.Id, err.Error()))
