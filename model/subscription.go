@@ -1029,7 +1029,7 @@ func RepairBindGroupSubscriptions() {
 
 	for group, groupPlans := range groupPlanMap {
 		var users []User
-		if err := DB.Where("`group` = ?", group).Find(&users).Error; err != nil {
+		if err := DB.Where(commonGroupCol+" = ?", group).Find(&users).Error; err != nil {
 			continue
 		}
 		for _, u := range users {

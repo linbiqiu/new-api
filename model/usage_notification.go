@@ -61,8 +61,8 @@ func AddUserDailyUsage(userID int, usageDate string, quotaDelta, tokenDelta int6
 	err := DB.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}, {Name: "usage_date"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"quota_used": gorm.Expr("CASE WHEN quota_used > ? THEN ? ELSE quota_used + ? END", maxUsageCounterValue-quotaDelta, maxUsageCounterValue, quotaDelta),
-			"token_used": gorm.Expr("CASE WHEN token_used > ? THEN ? ELSE token_used + ? END", maxUsageCounterValue-tokenDelta, maxUsageCounterValue, tokenDelta),
+			"quota_used": gorm.Expr("CASE WHEN user_daily_usage_counters.quota_used > ? THEN ? ELSE user_daily_usage_counters.quota_used + ? END", maxUsageCounterValue-quotaDelta, maxUsageCounterValue, quotaDelta),
+			"token_used": gorm.Expr("CASE WHEN user_daily_usage_counters.token_used > ? THEN ? ELSE user_daily_usage_counters.token_used + ? END", maxUsageCounterValue-tokenDelta, maxUsageCounterValue, tokenDelta),
 			"updated_at": now,
 		}),
 	}).Create(&row).Error
